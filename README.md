@@ -284,31 +284,175 @@ La aplicación:
 4. **Comparará** los datos de la tabla referenciada para `concept_id=6`
 5. **Generará** un reporte detallado con las diferencias encontradas
 
-## Formato de Salida
+## 📊 Formato de Salida JSON
 
-El resultado se genera en formato JSON con la siguiente estructura:
+El resultado se genera en formato JSON estructurado. A continuación se explica cada sección:
+
+### **Estructura Principal**
+
+```json
+{
+  "table_name": "billing_model",           // Nombre de la tabla comparada
+  "schema": "public",                      // Esquema de la tabla
+  "timestamp": "2025-10-28T15:30:00Z",    // Momento de la comparación
+  "total_rows_db1": 29,                   // Total de filas en DB1
+  "total_rows_db2": 33,                   // Total de filas en DB2
+  "matched_rows": 0,                      // Filas que hacen match entre DB1 y DB2
+  "unmatched_rows": 62,                   // Filas que NO hacen match (29+33)
+  "only_in_db1": [...],                   // Filas que solo están en DB1
+  "only_in_db2": [...],                   // Filas que solo están en DB2
+  "differences": [...],                   // Filas que hacen match pero tienen diferencias
+  "foreign_key_results": [...]            // Resultados del análisis de foreign keys
+}
+```
+
+### **Sección `only_in_db1` / `only_in_db2`**
+
+Contienen las filas completas que existen solo en una base de datos:
+
+```json
+"only_in_db1": [
+  {
+    "id": 26,
+    "description": "Get interest discount about number 693",
+    "order": 3,
+    "status": "ac",
+    "concept_id": 6,
+    "created_at": "2023-02-27T21:00:31.059667Z"
+  }
+]
+```
+
+### **Sección `differences`**
+
+Aparece cuando hay filas que hacen match pero tienen diferencias en algunas columnas:
+
+```json
+"differences": [
+  {
+    "row_identifier": "order:3|status:ac",     // Clave única generada para la fila
+    "db1_row": { /* fila completa de DB1 */ },
+    "db2_row": { /* fila completa de DB2 */ },
+    "column_differences": [
+      {
+        "column_name": "description",
+        "db1_value": "Descripción vieja",
+        "db2_value": "Descripción nueva",
+        "is_foreign_key": false,               // ¿Es esta columna una FK?
+        "foreign_key_reference": {...}         // Datos referenciados (si es FK)
+      }
+    ]
+  }
+]
+```
+
+### **Sección `foreign_key_results`** - Análisis Profundo de FKs
+
+Esta es la sección más importante para entender las relaciones:
+
+```json
+"foreign_key_results": [
+  {
+    "foreign_key": {
+      "column_name": "formula_id",              // Columna FK en tabla principal
+      "referenced_table": "formula",           // Tabla referenciada
+      "referenced_schema": "public",           // Esquema de la tabla referenciada
+      "referenced_column_name": "id",          // Columna referenciada (PK)
+      "constraint_name": "fk_billing_formula"  // Nombre de la restricción FK
+    },
+    "comparison_result": {
+      // Estadísticas de comparación de la tabla referenciada
+      "table_name": "formula",
+      "matched_rows": 5,        // Cuántas filas de 'formula' hacen match
+      "unmatched_rows": 10,     // Cuántas filas no hacen match
+      "only_in_db1": [...],     // Filas de 'formula' solo en DB1
+      "only_in_db2": [...],     // Filas de 'formula' solo en DB2
+      "differences": [...]      // Diferencias en filas de 'formula' que sí hacen match
+    },
+    "fk_references": [...]      // ¡DATOS REALES de las tablas referenciadas!
+  }
+]
+```
+
+### **Sección `fk_references`** - ⭐ La Más Importante
+
+Contiene los **datos completos** de las filas referenciadas por las foreign keys:
+
+```json
+"fk_references": [
+  {
+    "foreign_key": {
+      "column_name": "formula_id",
+      "referenced_table": "formula",
+      "constraint_name": "fk_billing_formula"
+    },
+    "db1_referenced": {
+      // DATOS COMPLETOS de la fila referenciada en DB1
+      "id": 19,
+      "name": "Formula Saldo Concepto", 
+      "description": "Obtiene el saldo actual del concepto",
+      "formula": "SELECT balance FROM accounts WHERE id = ?",
+      "version": "1.0",
+      "created_at": "2021-09-29T14:33:41.06Z"
+    },
+    "db2_referenced": {
+      // DATOS COMPLETOS de la fila referenciada en DB2
+      "id": 19,
+      "name": "Formula Saldo Concepto",
+      "description": "Obtiene el saldo actual del concepto", 
+      "formula": "SELECT balance * 1.1 FROM accounts WHERE id = ?",  // ¡Cambió!
+      "version": "1.1",                                            // ¡Nueva versión!
+      "created_at": "2021-09-29T14:33:41.06Z"
+    },
+    "referenced_diff": true    // ¿Son diferentes los datos referenciados?
+  }
+]
+```
+
+### **Significado de `referenced_diff`**
+
+- **`"referenced_diff": false`** = Los datos de la fila referenciada son **IDÉNTICOS** en ambas bases de datos
+- **`"referenced_diff": true`** = Los datos de la fila referenciada son **DIFERENTES** entre las bases de datos
+
+### **¿Por Qué es Útil `fk_references`?**
+
+Imagina que tienes:
+- **Tabla principal**: `billing_model` con `formula_id = 19` en ambas DBs
+- **A primera vista**: Parece que es la misma fórmula
+- **En realidad**: La lógica de la fórmula cambió en DB2
+
+Sin este análisis profundo, no te darías cuenta que aunque el ID es el mismo, **la fórmula actual es diferente** y puede producir resultados distintos.
+
+### **Ejemplo Práctico Completo**
 
 ```json
 {
   "table_name": "billing_model",
-  "schema": "public", 
-  "timestamp": "2025-10-28T15:30:00Z",
-  "total_rows_db1": 100,
-  "total_rows_db2": 98,
-  "matched_rows": 95,
-  "unmatched_rows": 5,
-  "only_in_db1": [...],
-  "only_in_db2": [...],
+  "matched_rows": 25,
   "differences": [
     {
-      "row_identifier": "order:3,status:ac,end_date:2025-12-29...",
-      "db1_row": {...},
-      "db2_row": {...},
+      "row_identifier": "order:3|status:ac",
       "column_differences": [
         {
-          "column_name": "description",
-          "db1_value": "Get interest discount about number 693 31 of JUL of 2025",
-          "db2_value": null
+          "column_name": "formula_id",
+          "db1_value": 19,
+          "db2_value": 19,
+          "is_foreign_key": true,
+          "foreign_key_reference": {
+            "foreign_key": {
+              "column_name": "formula_id",
+              "referenced_table": "formula"
+            },
+            "db1_referenced": {
+              "id": 19,
+              "formula": "SELECT balance FROM accounts"
+            },
+            "db2_referenced": {
+              "id": 19, 
+              "formula": "SELECT balance * 1.1 FROM accounts"  // ¡Diferente!
+            },
+            "referenced_diff": true
+          }
         }
       ]
     }
@@ -316,19 +460,31 @@ El resultado se genera en formato JSON con la siguiente estructura:
   "foreign_key_results": [
     {
       "foreign_key": {
-        "column_name": "concept_id",
-        "referenced_table": "concepts",
-        "referenced_schema": "public",
-        "referenced_column_name": "id"
+        "column_name": "formula_id",
+        "referenced_table": "formula"
       },
       "comparison_result": {
         "matched_rows": 1,
-        "differences": [...]
-      }
+        "differences": [
+          // Aquí verías las diferencias en la tabla 'formula'
+        ]
+      },
+      "fk_references": [
+        // Datos completos de todas las fórmulas referenciadas
+      ]
     }
   ]
 }
 ```
+
+### **Casos de Uso**
+
+1. **Migración de Datos**: Verificar que las relaciones se migraron correctamente
+2. **Sincronización**: Detectar diferencias entre entornos de desarrollo y producción  
+3. **Auditoría**: Encontrar cambios en configuraciones o datos maestros
+4. **Debugging**: Entender por qué dos registros aparentemente iguales producen resultados diferentes
+
+La clave está en que no solo comparamos los IDs de las foreign keys, sino **los datos reales** a los que apuntan esas FKs.
 
 ## Algoritmo de Matching
 
