@@ -78,16 +78,27 @@ type RowDifference struct {
 
 // ColumnDifference represents a difference in a specific column
 type ColumnDifference struct {
-	ColumnName string      `json:"column_name"`
-	DB1Value   interface{} `json:"db1_value"`
-	DB2Value   interface{} `json:"db2_value"`
+	ColumnName          string               `json:"column_name"`
+	DB1Value            interface{}          `json:"db1_value"`
+	DB2Value            interface{}          `json:"db2_value"`
+	IsForeignKey        bool                 `json:"is_foreign_key,omitempty"`
+	ForeignKeyReference *ForeignKeyReference `json:"foreign_key_reference,omitempty"`
 }
 
-// ForeignKeyResult represents the result of foreign key comparison
+// ForeignKeyReference represents the actual data referenced by a foreign key
+type ForeignKeyReference struct {
+	ForeignKey     ForeignKey `json:"foreign_key"`
+	DB1Referenced  TableRow   `json:"db1_referenced,omitempty"`
+	DB2Referenced  TableRow   `json:"db2_referenced,omitempty"`
+	ReferencedDiff bool       `json:"referenced_diff"`
+}
+
+// ForeignKeyResult represents the result of a foreign key comparison
 type ForeignKeyResult struct {
-	ForeignKey       ForeignKey        `json:"foreign_key"`
-	ComparisonResult *ComparisonResult `json:"comparison_result,omitempty"`
-	Error            string            `json:"error,omitempty"`
+	ForeignKey       ForeignKey            `json:"foreign_key"`
+	ComparisonResult ComparisonResult      `json:"comparison_result"`
+	Error            string                `json:"error,omitempty"`
+	FKReferences     []ForeignKeyReference `json:"fk_references,omitempty"`
 }
 
 // MatchCriteria represents the criteria used to match rows between tables

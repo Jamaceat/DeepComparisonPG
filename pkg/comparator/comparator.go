@@ -3,6 +3,8 @@ package comparator
 import (
 	"fmt"
 	"reflect"
+	"sort"
+	"strings"
 	"time"
 
 	"deepComparator/pkg/database"
@@ -92,7 +94,7 @@ func (c *Comparator) CompareTable(schema, tableName string, criteria *models.Mat
 
 	// Compare matched rows for differences
 	for _, match := range matches {
-		diff := c.compareRows(match.row1, match.row2, criteria)
+		diff := c.compareRowsWithFK(match.row1, match.row2, criteria, schema1.ForeignKeys)
 		if len(diff.ColumnDifferences) > 0 {
 			diff.RowIdentifier = c.getRowIdentifier(match.row1, criteria)
 			result.Differences = append(result.Differences, *diff)
@@ -187,7 +189,7 @@ func (c *Comparator) getRowKey(row models.TableRow, criteria *models.MatchCriter
 		for col, val := range row {
 			if !excludeMap[col] {
 				// Skip primary key columns unless explicitly included
-				if !criteria.IncludePrimaryKey && c.isPrimaryKeyColumn(col) {
+				if c.isPrimaryKeyColumn(col) && !criteria.IncludePrimaryKey {
 					continue
 				}
 				keyParts = append(keyParts, fmt.Sprintf("%s:%v", col, val))
@@ -195,7 +197,9 @@ func (c *Comparator) getRowKey(row models.TableRow, criteria *models.MatchCriter
 		}
 	}
 
-	return fmt.Sprintf("%v", keyParts)
+	// Sort key parts to ensure consistent ordering
+	sort.Strings(keyParts)
+	return strings.Join(keyParts, "|")
 }
 
 // getRowIdentifier creates a human-readable identifier for a row
@@ -205,6 +209,10 @@ func (c *Comparator) getRowIdentifier(row models.TableRow, criteria *models.Matc
 
 // compareRows compares two rows and returns differences
 func (c *Comparator) compareRows(row1, row2 models.TableRow, criteria *models.MatchCriteria) *models.RowDifference {
+	return c.compareRowsWithFK(row1, row2, criteria, nil)
+}
+
+func (c *Comparator) compareRowsWithFK(row1, row2 models.TableRow, criteria *models.MatchCriteria, foreignKeys []models.ForeignKey) *models.RowDifference {
 	diff := &models.RowDifference{
 		DB1Row:            row1,
 		DB2Row:            row2,
@@ -225,6 +233,12 @@ func (c *Comparator) compareRows(row1, row2 models.TableRow, criteria *models.Ma
 		for _, col := range fileColumns {
 			excludeMap[col] = true
 		}
+	}
+
+	// Create map for quick FK lookup
+	fkMap := make(map[string]models.ForeignKey)
+	for _, fk := range foreignKeys {
+		fkMap[fk.ColumnName] = fk
 	}
 
 	// Compare all columns
@@ -249,21 +263,90 @@ func (c *Comparator) compareRows(row1, row2 models.TableRow, criteria *models.Ma
 		}
 
 		if !exists1 || !exists2 || !reflect.DeepEqual(val1, val2) {
-			diff.ColumnDifferences = append(diff.ColumnDifferences, models.ColumnDifference{
+			colDiff := models.ColumnDifference{
 				ColumnName: col,
 				DB1Value:   val1,
 				DB2Value:   val2,
-			})
+			}
+
+			// Check if this column is a foreign key
+			if fk, isForeignKey := fkMap[col]; isForeignKey {
+				colDiff.IsForeignKey = true
+
+				// Get referenced data if values exist
+				if val1 != nil || val2 != nil {
+					fkRef := c.getForeignKeyReference(fk, val1, val2)
+					colDiff.ForeignKeyReference = fkRef
+				}
+			}
+
+			diff.ColumnDifferences = append(diff.ColumnDifferences, colDiff)
 		}
 	}
 
 	return diff
 }
 
+// getForeignKeyReference gets the referenced data for a foreign key
+func (c *Comparator) getForeignKeyReference(fk models.ForeignKey, val1, val2 interface{}) *models.ForeignKeyReference {
+	var values []interface{}
+	if val1 != nil {
+		values = append(values, val1)
+	}
+	if val2 != nil {
+		values = append(values, val2)
+	}
+
+	if len(values) == 0 {
+		return nil
+	}
+
+	// Get foreign key data from both databases
+	fkData1, err1 := c.DB1.GetForeignKeyData(fk, values)
+	fkData2, err2 := c.DB2.GetForeignKeyData(fk, values)
+
+	if err1 != nil && err2 != nil {
+		return nil
+	}
+
+	fkRef := &models.ForeignKeyReference{
+		ForeignKey: fk,
+	}
+
+	// Find the referenced rows
+	if val1 != nil && err1 == nil {
+		for _, row := range fkData1 {
+			if pkVal, exists := row[fk.ReferencedColumnName]; exists && reflect.DeepEqual(pkVal, val1) {
+				fkRef.DB1Referenced = row
+				break
+			}
+		}
+	}
+
+	if val2 != nil && err2 == nil {
+		for _, row := range fkData2 {
+			if pkVal, exists := row[fk.ReferencedColumnName]; exists && reflect.DeepEqual(pkVal, val2) {
+				fkRef.DB2Referenced = row
+				break
+			}
+		}
+	}
+
+	// Check if there are differences in the referenced data
+	if len(fkRef.DB1Referenced) > 0 && len(fkRef.DB2Referenced) > 0 {
+		fkRef.ReferencedDiff = !reflect.DeepEqual(fkRef.DB1Referenced, fkRef.DB2Referenced)
+	} else {
+		fkRef.ReferencedDiff = len(fkRef.DB1Referenced) != len(fkRef.DB2Referenced)
+	}
+
+	return fkRef
+}
+
 // compareForeignKey compares foreign key relationships
 func (c *Comparator) compareForeignKey(fk models.ForeignKey, data1, data2 *models.TableData, criteria *models.MatchCriteria) *models.ForeignKeyResult {
 	result := &models.ForeignKeyResult{
-		ForeignKey: fk,
+		ForeignKey:   fk,
+		FKReferences: []models.ForeignKeyReference{},
 	}
 
 	// Get unique foreign key values from both datasets
@@ -293,8 +376,6 @@ func (c *Comparator) compareForeignKey(fk models.ForeignKey, data1, data2 *model
 		return result
 	}
 
-	// Create a sub-comparator for the foreign key table (not needed for direct comparison)
-
 	// Create temporary table data objects
 	tempData1 := &models.TableData{
 		TableName: fk.ReferencedTable,
@@ -308,8 +389,22 @@ func (c *Comparator) compareForeignKey(fk models.ForeignKey, data1, data2 *model
 		Rows:      fkData2,
 	}
 
-	// Compare the foreign key data directly using row matching
-	matches, onlyInDB1, onlyInDB2 := c.matchRows(tempData1.Rows, tempData2.Rows, criteria)
+	// Get schema for the referenced table to create appropriate criteria
+	referencedSchema, err := c.DB1.GetTableSchema(fk.ReferencedSchema, fk.ReferencedTable)
+	var fkCriteria *models.MatchCriteria
+	if err != nil {
+		// If we can't get schema, use the provided criteria
+		fkCriteria = criteria
+	} else {
+		// Create default criteria for the referenced table
+		fkCriteria = c.createDefaultMatchCriteria(referencedSchema)
+		// Copy file-based exclusion settings from original criteria
+		fkCriteria.ExcludeColumnsFromFile = criteria.ExcludeColumnsFromFile
+		fkCriteria.ExcludeColumnsFile = criteria.ExcludeColumnsFile
+	}
+
+	// Compare the foreign key data directly using row matching with appropriate criteria
+	matches, onlyInDB1, onlyInDB2 := c.matchRows(tempData1.Rows, tempData2.Rows, fkCriteria)
 
 	fkComparison := &models.ComparisonResult{
 		TableName:     fk.ReferencedTable,
@@ -324,16 +419,47 @@ func (c *Comparator) compareForeignKey(fk models.ForeignKey, data1, data2 *model
 		Differences:   []models.RowDifference{},
 	}
 
-	// Check for differences in matched foreign key rows
+	// Check for differences in matched foreign key rows and build FK references
 	for _, match := range matches {
 		diff := c.compareRows(match.row1, match.row2, criteria)
-		if len(diff.ColumnDifferences) > 0 {
+		hasDiff := len(diff.ColumnDifferences) > 0
+
+		if hasDiff {
 			diff.RowIdentifier = c.getRowIdentifier(match.row1, criteria)
 			fkComparison.Differences = append(fkComparison.Differences, *diff)
 		}
+
+		// Create FK reference for this match
+		fkRef := models.ForeignKeyReference{
+			ForeignKey:     fk,
+			DB1Referenced:  match.row1,
+			DB2Referenced:  match.row2,
+			ReferencedDiff: hasDiff,
+		}
+		result.FKReferences = append(result.FKReferences, fkRef)
 	}
 
-	result.ComparisonResult = fkComparison
+	// Add references for rows only in DB1
+	for _, row := range onlyInDB1 {
+		fkRef := models.ForeignKeyReference{
+			ForeignKey:     fk,
+			DB1Referenced:  row,
+			ReferencedDiff: true, // Always different if only in one DB
+		}
+		result.FKReferences = append(result.FKReferences, fkRef)
+	}
+
+	// Add references for rows only in DB2
+	for _, row := range onlyInDB2 {
+		fkRef := models.ForeignKeyReference{
+			ForeignKey:     fk,
+			DB2Referenced:  row,
+			ReferencedDiff: true, // Always different if only in one DB
+		}
+		result.FKReferences = append(result.FKReferences, fkRef)
+	}
+
+	result.ComparisonResult = *fkComparison
 	return result
 }
 
@@ -365,12 +491,23 @@ func (c *Comparator) isPrimaryKeyColumn(columnName string) bool {
 
 // getUniqueValues returns unique values from a slice
 func (c *Comparator) getUniqueValues(values []interface{}) []interface{} {
-	seen := make(map[interface{}]bool)
 	var unique []interface{}
 
 	for _, val := range values {
-		if val != nil && !seen[val] {
-			seen[val] = true
+		if val == nil {
+			continue
+		}
+
+		// Check if this value already exists in unique slice
+		found := false
+		for _, existing := range unique {
+			if reflect.DeepEqual(val, existing) {
+				found = true
+				break
+			}
+		}
+
+		if !found {
 			unique = append(unique, val)
 		}
 	}

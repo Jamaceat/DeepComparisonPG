@@ -232,7 +232,7 @@ func printSummary(result *models.ComparisonResult) {
 					fkResult.ForeignKey.ReferencedSchema,
 					fkResult.ForeignKey.ReferencedTable,
 					fkResult.Error)
-			} else if fkResult.ComparisonResult != nil {
+			} else {
 				fmt.Printf("FK %s -> %s.%s: %d matched, %d differences\n",
 					fkResult.ForeignKey.ColumnName,
 					fkResult.ForeignKey.ReferencedSchema,
