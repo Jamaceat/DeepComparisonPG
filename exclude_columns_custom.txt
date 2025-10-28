@@ -1,0 +1,22 @@
+# Ejemplo de archivo personalizado de columnas a excluir
+# Este archivo contiene solo las columnas que TÚ quieres excluir
+# Puedes crear varios archivos para diferentes tipos de tablas
+
+# Timestamps básicos
+created_at
+updated_at
+deleted_at
+
+# Usuarios
+created_by
+updated_by
+
+# Control de versiones
+version
+revision
+
+# Columnas específicas de tu proyecto
+last_sync
+batch_processed_at
+migration_flag
+temp_status

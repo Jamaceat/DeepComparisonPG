@@ -1,0 +1,75 @@
+# Archivo de configuración de columnas a excluir
+# Una columna por línea. Las líneas que empiecen con # son comentarios.
+# Puedes agregar o quitar columnas según tus necesidades.
+# Este archivo incluye columnas de auditoría comunes, pero puedes agregar cualquier columna.
+
+# Timestamp columns
+created_at
+updated_at
+deleted_at
+modified_at
+timestamp
+date_created
+date_updated
+date_modified
+date_deleted
+creation_date
+modification_date
+update_date
+deletion_date
+
+# User columns
+created_by
+updated_by
+deleted_by
+modified_by
+user_id
+creator_id
+updater_id
+modifier_id
+created_user
+updated_user
+created_by_user
+updated_by_user
+modified_by_user
+
+# Version and control columns
+version
+revision
+row_version
+version_number
+record_version
+etag
+checksum
+hash
+lock_version
+optimistic_lock
+
+# System columns
+last_login
+last_access
+login_count
+access_count
+ip_address
+user_agent
+session_id
+trace_id
+request_id
+
+# Soft delete columns
+is_deleted
+deleted
+active
+is_active
+status_deleted
+
+# Sync and migration columns
+sync_status
+migrated_at
+migration_id
+import_id
+batch_id
+source_system
+external_id
+legacy_id
+original_id
