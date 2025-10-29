@@ -10,6 +10,7 @@ import (
 	"deepComparator/pkg/concurrent"
 	"deepComparator/pkg/database"
 	"deepComparator/pkg/models"
+	"deepComparator/pkg/progress"
 )
 
 // convertBytesToString converts byte arrays to strings, keeping other types as-is
@@ -118,7 +119,9 @@ func (c *Comparator) CompareTable(schema, tableName string, criteria *models.Mat
 	}
 
 	// Match rows between databases
+	matchProgress := progress.NewSimpleProgress("Matching rows")
 	matches, onlyInDB1, onlyInDB2 := c.matchRows(data1.Rows, data2.Rows, criteria)
+	matchProgress.Finish(fmt.Sprintf("Found %d matches", len(matches)))
 
 	result.OnlyInDB1 = onlyInDB1
 	result.OnlyInDB2 = onlyInDB2
@@ -126,12 +129,28 @@ func (c *Comparator) CompareTable(schema, tableName string, criteria *models.Mat
 	result.UnmatchedRows = len(onlyInDB1) + len(onlyInDB2)
 
 	// Compare matched rows for differences
-	for _, match := range matches {
+	var comparisonProgress *progress.ProgressBar
+	if len(matches) > 0 { // Show progress bar for any number of matches
+		comparisonProgress = progress.NewProgressBar(int64(len(matches)), "Comparing matched rows")
+	}
+
+	for i, match := range matches {
 		diff := c.compareRowsWithFK(match.row1, match.row2, criteria, schema1.ForeignKeys)
 		if len(diff.ColumnDifferences) > 0 {
 			diff.RowIdentifier = c.getRowIdentifier(match.row1, criteria)
 			result.Differences = append(result.Differences, *diff)
 		}
+
+		if comparisonProgress != nil {
+			// Update progress for every row, or batch for large datasets
+			if len(matches) <= 100 || (i+1)%10 == 0 {
+				comparisonProgress.SetProgress(int64(i + 1))
+			}
+		}
+	}
+
+	if comparisonProgress != nil {
+		comparisonProgress.FinishWithMessage(fmt.Sprintf("Found %d differences", len(result.Differences)))
 	}
 
 	// Compare foreign key relationships

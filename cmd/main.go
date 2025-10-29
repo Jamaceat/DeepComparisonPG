@@ -12,6 +12,7 @@ import (
 	"deepComparator/pkg/config"
 	"deepComparator/pkg/database"
 	"deepComparator/pkg/models"
+	"deepComparator/pkg/progress"
 )
 
 func main() {
@@ -32,8 +33,19 @@ func main() {
 		targetColumn    = flag.String("target-column", "id", "Target column to find references for (used with -find-references)")
 		maxWorkers      = flag.Int("max-workers", 4, "Maximum number of concurrent workers for parallel operations (default: 4)")
 		decodeUUIDs     = flag.Bool("decode-uuids", true, "Decode Base64 encoded UUIDs in output for easier database searching (default: true)")
+		progressDemo    = flag.Bool("progress-demo", false, "Run progress bar demonstration with simulated delays")
 	)
 	flag.Parse()
+
+	// Run progress demo if requested
+	if *progressDemo {
+		fmt.Println("🎯 Running Progress Bar Demo...")
+		fmt.Println("This will show you how the progress bars work with realistic timing.")
+		fmt.Println()
+
+		progress.DemoProgressBars()
+		return
+	}
 
 	// Show exclude columns if requested
 	if *showExcludeCols {

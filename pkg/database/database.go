@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"deepComparator/pkg/models"
+	"deepComparator/pkg/progress"
 
 	_ "github.com/lib/pq"
 )
@@ -16,19 +17,27 @@ type Connection struct {
 	Config models.DatabaseConfig
 }
 
-// NewConnection creates a new database connection
+// NewConnection creates a new database connection with progress indication
 func NewConnection(config models.DatabaseConfig) (*Connection, error) {
+	// Show connection progress
+	connProgress := progress.NewConnectionProgress(fmt.Sprintf("Connecting to %s:%d/%s",
+		config.Host, config.Port, config.Database))
+
 	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
 		config.Host, config.Port, config.Username, config.Password, config.Database, config.SSLMode)
 
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
+		connProgress.Error(fmt.Sprintf("Failed to open connection: %v", err))
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
 	if err := db.Ping(); err != nil {
+		connProgress.Error(fmt.Sprintf("Failed to ping database: %v", err))
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
+
+	connProgress.Success("Connected successfully")
 
 	return &Connection{
 		DB:     db,
@@ -119,8 +128,16 @@ func (c *Connection) GetTableSchema(schema, tableName string) (*models.TableSche
 	return tableSchema, nil
 }
 
-// GetTableData retrieves all data from a table
+// GetTableData retrieves all data from a table with progress indication
 func (c *Connection) GetTableData(schema, tableName string) (*models.TableData, error) {
+	// First, get row count for progress bar
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s", schema, tableName)
+	var totalRows int64
+	err := c.DB.QueryRow(countQuery).Scan(&totalRows)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get row count: %w", err)
+	}
+
 	query := fmt.Sprintf("SELECT * FROM %s.%s", schema, tableName)
 
 	rows, err := c.DB.Query(query)
@@ -140,6 +157,14 @@ func (c *Connection) GetTableData(schema, tableName string) (*models.TableData, 
 		Rows:      []models.TableRow{},
 	}
 
+	// Initialize progress bar
+	var progressBar *progress.ProgressBar
+	if totalRows > 100 { // Only show progress for larger datasets
+		progressBar = progress.NewProgressBar(totalRows,
+			fmt.Sprintf("Loading %s.%s", schema, tableName))
+	}
+
+	var processedRows int64
 	for rows.Next() {
 		values := make([]interface{}, len(columns))
 		valuePtrs := make([]interface{}, len(columns))
@@ -156,6 +181,15 @@ func (c *Connection) GetTableData(schema, tableName string) (*models.TableData, 
 			row[col] = values[i]
 		}
 		tableData.Rows = append(tableData.Rows, row)
+
+		processedRows++
+		if progressBar != nil && processedRows%100 == 0 { // Update every 100 rows
+			progressBar.SetProgress(processedRows)
+		}
+	}
+
+	if progressBar != nil {
+		progressBar.FinishWithMessage(fmt.Sprintf("Loaded %d rows", processedRows))
 	}
 
 	return tableData, nil

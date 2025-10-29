@@ -4,6 +4,7 @@ import (
 	"context"
 	"deepComparator/pkg/database"
 	"deepComparator/pkg/models"
+	"deepComparator/pkg/progress"
 	"fmt"
 	"sync"
 	"time"
@@ -41,6 +42,9 @@ func (cc *ConcurrentComparator) ParallelDataFetch(schema, tableName string) (*mo
 
 	resultChan := make(chan fetchResult, 1)
 
+	// Show loading progress for data fetch
+	loadProgress := progress.NewSimpleProgress("Loading table data")
+
 	go func() {
 		defer close(resultChan)
 
@@ -50,9 +54,7 @@ func (cc *ConcurrentComparator) ParallelDataFetch(schema, tableName string) (*mo
 
 		var data1, data2 *models.TableData
 		var tableSchema *models.TableSchema
-		var errs []error
-
-		// Fetch data from DB1
+		var errs []error // Fetch data from DB1
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -92,6 +94,16 @@ func (cc *ConcurrentComparator) ParallelDataFetch(schema, tableName string) (*mo
 		}()
 
 		wg.Wait()
+
+		// Complete the loading progress
+		totalRows := 0
+		if data1 != nil {
+			totalRows += len(data1.Rows)
+		}
+		if data2 != nil {
+			totalRows += len(data2.Rows)
+		}
+		loadProgress.Finish(fmt.Sprintf("Loaded %d total rows", totalRows))
 
 		result := fetchResult{
 			data1:  data1,
