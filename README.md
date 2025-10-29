@@ -2,6 +2,61 @@
 
 Una aplicación avanzada en Go para comparar profundamente datos entre dos bases de datos PostgreSQL, incluyendo análisis completo de foreign keys, detección de diferencias a nivel de registro, y análisis de referencias cruzadas.
 
+## 📚 Índice
+
+### 🚀 **Inicio Rápido**
+- [✨ Características Principales](#-características-principales)
+- [🏗️ Arquitectura del Proyecto](#️-arquitectura-del-proyecto)
+- [🚀 Instalación y Configuración](#-instalación-y-configuración)
+- [⚙️ Configuración](#configuración)
+
+### 🔧 **Uso de la Aplicación**
+- [� Uso del Sistema](#-uso-del-sistema)
+- [�📋 Opciones Disponibles](#-opciones-disponibles)
+- [📚 Ejemplos de Uso](#-ejemplos-de-uso)
+- [�️ Exclusión de Columnas por Archivo](#️-exclusión-de-columnas-por-archivo)
+- [�🚀 Optimización de Rendimiento](#-optimización-de-rendimiento)
+
+### 📊 **Análisis y Resultados**
+- [� Formato de Salida JSON](#-formato-de-salida-json)
+- [� Análisis de Referencias](#-análisis-de-referencias-nuevo)
+- [📄 Estructura del Archivo comparison_result_references.json](#-estructura-del-archivo-comparison_result_referencesjson)
+- [🎯 Casos de Uso del Análisis de Referencias](#-casos-de-uso-del-análisis-de-referencias)
+
+### 🛠️ **Configuración Avanzada**
+- [Ejemplo de Escenario](#ejemplo-de-escenario)
+- [Algoritmo de Matching](#algoritmo-de-matching)
+- [Desarrollo](#desarrollo)
+- [⚠️ Consideraciones y Limitaciones](#️-consideraciones-y-limitaciones)
+
+### 🆘 **Soporte y Resolución de Problemas**
+- [🛠️ Troubleshooting y Mejores Prácticas](#️-troubleshooting-y-mejores-prácticas)
+- [🤝 Contribuir al Proyecto](#-contribuir-al-proyecto)
+- [📋 Roadmap](#-roadmap)
+- [📜 Versionado](#-versionado)
+- [📄 Licencia](#-licencia)
+- [🆘 Soporte y Comunidad](#-soporte-y-comunidad)
+
+### ⚡ **Navegación Rápida**
+- **🏃‍♂️ [Empezar YA](#-instalación)** - Instalación y primer uso
+- **💡 [Ejemplos Prácticos](#-comparación-de-datos)** - Comandos listos para usar
+- **🔍 [Análisis de Referencias](#-análisis-de-referencias)** - Nueva funcionalidad
+- **🚀 [Rendimiento](#-procesamiento-concurrente)** - Optimización con workers
+- **❓ [Problemas](#️-troubleshooting-y-mejores-prácticas)** - Solución de errores
+
+### 🎯 **Casos de Uso Frecuentes**
+| Necesidad | Ir a Sección | Comando Rápido |
+|-----------|--------------|----------------|
+| **Comparar tabla básica** | [Comparación de Datos](#-comparación-de-datos) | `./deepComparator -table=mi_tabla -verbose` |
+| **Excluir columnas audit** | [Exclusión de Columnas](#️-exclusión-de-columnas-por-archivo) | `./deepComparator -table=mi_tabla -exclude-from-file` |
+| **Ver qué referencia una tabla** | [Análisis de Referencias](#-análisis-de-referencias) | `./deepComparator -find-references -table=mi_tabla` |
+| **Mejorar rendimiento** | [Optimización](#-optimización-de-rendimiento) | `./deepComparator -table=mi_tabla -max-workers=8` |
+| **Solucionar errores** | [Troubleshooting](#️-troubleshooting-y-mejores-prácticas) | Ver sección de errores comunes |
+
+**🆙 [Volver arriba](#-deep-database-comparator)** ↑
+
+---
+
 ## ✨ Características Principales
 
 ### **🔄 Comparación Profunda de Datos**
@@ -318,6 +373,7 @@ batch_processed_at
 - **Control total**: Puedes desactivar la exclusión cuando sea necesario
 
 ## **🚀 Optimización de Rendimiento**
+*📚 [Volver al índice](#-índice)*
 
 ### **Procesamiento Concurrente**
 
@@ -623,6 +679,7 @@ Sin este análisis profundo, no te darías cuenta que aunque el ID es el mismo, 
 La clave está en que no solo comparamos los IDs de las foreign keys, sino **los datos reales** a los que apuntan esas FKs.
 
 ## 🔍 Análisis de Referencias (Nuevo)
+*📚 [Volver al índice](#-índice)*
 
 Además de la comparación de tablas, el sistema incluye una funcionalidad para encontrar todas las referencias a una tabla/columna específica.
 
@@ -667,76 +724,226 @@ Encuentra todas las tablas que tienen foreign keys apuntando a una tabla/columna
 
 ### **Archivo de Salida**
 
-Por defecto genera `match_reference_result.json` (o `<nombre>_references.json` si se especifica un archivo base).
+Por defecto genera `comparison_result_references.json` (o `<archivo_especificado>_references.json` si se usa `-output`).
 
-### **Formato JSON de Salida**
+### **📄 Estructura del Archivo `comparison_result_references.json`**
+
+#### **Metadatos Principales**
+```json
+{
+  "target_table": "banks",              // Tabla objetivo analizada
+  "target_schema": "public",            // Esquema de la tabla objetivo
+  "target_column": "id",               // Columna objetivo (por defecto "id")
+  "timestamp": "2025-10-29T10:56:46Z", // Momento del análisis
+  "total_references": 0,               // Total de valores referenciados activos
+  "referencing_tables": 14,            // Número de tablas que tienen FK a la objetivo
+  "references": [...]                  // Array detallado de cada referencia
+}
+```
+
+#### **Detalle de Referencias**
+Cada elemento en el array `references` contiene:
 
 ```json
 {
-  "target_table": "concepts",
-  "target_schema": "public", 
-  "target_column": "id",
-  "timestamp": "2025-10-29T09:51:11Z",
-  "total_references": 510,
-  "referencing_tables": 6,
+  "table_name": "bank_accounts",                    // Tabla que referencia
+  "schema": "public",                              // Esquema de la tabla referenciadora
+  "column_name": "bank_id",                        // Columna FK en tabla referenciadora
+  "constraint_name": "fk_bank_id",                 // Nombre de la restricción FK
+  "db1_references": [1, 2, 3, 15, 22],            // Valores FK únicos en DB1
+  "db2_references": [1, 2, 3, 15, 22, 25],        // Valores FK únicos en DB2
+  "common_references": [1, 2, 3, 15, 22],         // Valores presentes en AMBAS DBs
+  "only_in_db1": [],                               // Valores FK solo en DB1
+  "only_in_db2": [25]                              // Valores FK solo en DB2
+}
+```
+
+### **🔍 Significado de Cada Campo**
+
+#### **Campos de Metadatos:**
+| Campo | Tipo | Descripción | Ejemplo |
+|-------|------|-------------|---------|
+| `target_table` | string | Tabla principal que se está analizando | `"banks"` |
+| `target_schema` | string | Esquema donde está la tabla objetivo | `"public"` |
+| `target_column` | string | Columna objetivo (normalmente PK) | `"id"` |
+| `timestamp` | string | Marca de tiempo ISO 8601 del análisis | `"2025-10-29T10:56:46Z"` |
+| `total_references` | number | Suma de todos los valores referenciados activos | `847` |
+| `referencing_tables` | number | Cantidad de tablas que tienen FK hacia la objetivo | `14` |
+
+#### **Campos por Referencia:**
+| Campo | Tipo | Descripción | Cuándo aparece |
+|-------|------|-------------|----------------|
+| `table_name` | string | Nombre de la tabla que contiene la FK | Siempre |
+| `schema` | string | Esquema de la tabla referenciadora | Siempre |
+| `column_name` | string | Nombre de la columna FK | Siempre |
+| `constraint_name` | string | Nombre de la restricción de foreign key | Siempre |
+| `db1_references` | array/null | Valores únicos de la FK encontrados en DB1 | `null` si tabla no existe en DB1 |
+| `db2_references` | array/null | Valores únicos de la FK encontrados en DB2 | `null` si tabla no existe en DB2 |
+| `common_references` | array/null | Valores FK que existen en AMBAS bases de datos | `null` si no hay coincidencias |
+| `only_in_db1` | array/null | Valores FK que SOLO están en DB1 | `null` si no hay exclusivos |
+| `only_in_db2` | array/null | Valores FK que SOLO están en DB2 | `null` si no hay exclusivos |
+
+### **📊 Estados Posibles de los Datos**
+
+#### **✅ Escenario Normal (Consistente)**
+```json
+{
+  "db1_references": [1, 2, 3, 5],
+  "db2_references": [1, 2, 3, 5],
+  "common_references": [1, 2, 3, 5],
+  "only_in_db1": [],
+  "only_in_db2": []
+}
+```
+**Interpretación**: Ambas DBs tienen exactamente las mismas referencias. ✅ Consistente.
+
+#### **⚠️ Escenario con Diferencias**
+```json
+{
+  "db1_references": [1, 2, 3, 5, 8],
+  "db2_references": [1, 2, 3, 5, 9, 10],
+  "common_references": [1, 2, 3, 5],
+  "only_in_db1": [8],
+  "only_in_db2": [9, 10]
+}
+```
+**Interpretación**: 
+- DB1 tiene referencia al ID `8` que no existe en DB2
+- DB2 tiene referencias a IDs `9, 10` que no existen en DB1
+- Ambas comparten referencias a IDs `1, 2, 3, 5`
+
+#### **❌ Escenario de Tabla Inexistente**
+```json
+{
+  "db1_references": null,
+  "db2_references": [1, 2, 3],
+  "common_references": null,
+  "only_in_db1": null,
+  "only_in_db2": null
+}
+```
+**Interpretación**: La tabla referenciadora no existe en DB1, solo en DB2.
+
+### **🎯 Casos de Uso del Análisis de Referencias**
+
+#### **1. 🔍 Auditoría de Integridad Referencial**
+```bash
+# Verificar consistencia de referencias a tabla principal
+./deepComparator -table=banks -find-references -verbose
+```
+**Objetivo**: Detectar referencias huérfanas o inconsistentes entre ambientes.
+
+#### **2. 🚚 Migración Segura de Datos**
+```bash
+# Antes de eliminar registros, verificar impacto
+./deepComparator -table=concepts -target-column=id -find-references
+```
+**Objetivo**: Identificar todas las tablas que se verían afectadas por cambios.
+
+#### **3. 🧹 Limpieza de Datos**
+```bash
+# Encontrar referencias no utilizadas
+./deepComparator -table=categories -find-references -max-workers=8
+```
+**Objetivo**: Detectar IDs que existen en tabla principal pero no tienen referencias.
+
+#### **4. 📊 Análisis de Consistencia entre Ambientes**
+```bash
+# Comparar referencias entre producción y desarrollo
+./deepComparator -table=users -schema=auth -find-references
+```
+**Objetivo**: Verificar que ambos ambientes tienen la misma estructura referencial.
+
+#### **5. 🔄 Sincronización de Referencias**
+```bash
+# Análisis masivo de múltiples tablas
+./deepComparator -table=main_catalog -find-references -max-workers=16
+```
+**Objetivo**: Identificar discrepancias para proceso de sincronización.
+
+### **📋 Ejemplos Prácticos de Interpretación**
+
+#### **Ejemplo 1: Análisis de Bancos**
+```bash
+./deepComparator -table=banks -find-references -verbose
+```
+
+**Resultado esperado:**
+```json
+{
+  "target_table": "banks",
+  "referencing_tables": 14,
   "references": [
     {
-      "table_name": "related_concepts",
-      "schema": "public",
-      "column_name": "concept_id",
-      "constraint_name": "fk_related_concepts_c",
-      "db1_references": [1, 2, 6, 7, 13, 15, 16, 18, 20, 21],
-      "db2_references": [1, 2, 6, 7, 13, 15, 16, 18, 20, 21],
-      "common_references": [1, 2, 6, 7, 13, 15, 16, 18, 20, 21],
-      "only_in_db1": [],
-      "only_in_db2": []
+      "table_name": "bank_accounts",
+      "column_name": "bank_id",
+      "db1_references": [1, 2, 5, 8],
+      "db2_references": [1, 2, 5, 8, 12],
+      "only_in_db2": [12]
     }
   ]
 }
 ```
 
-### **Campos del JSON**
+**📖 Interpretación:**
+- ✅ **14 tablas** referencian la tabla `banks`
+- ⚠️ **Inconsistencia detectada**: DB2 tiene cuentas bancarias (`bank_accounts`) que referencian al banco ID `12`, pero ese banco puede no existir en DB1
+- 🔧 **Acción requerida**: Verificar si el banco ID `12` debe ser migrado a DB1
 
-- **`target_table/schema/column`**: Tabla/esquema/columna objetivo analizada
-- **`total_references`**: Total de valores referenciados encontrados
-- **`referencing_tables`**: Número de tablas que referencian la tabla objetivo
-- **`references`**: Array con detalles de cada tabla referenciadora
-
-**Por cada referencia:**
-- **`table_name/schema`**: Tabla que contiene la foreign key
-- **`column_name`**: Columna que es foreign key
-- **`constraint_name`**: Nombre de la restricción FK
-- **`db1_references`**: Valores únicos encontrados en DB1
-- **`db2_references`**: Valores únicos encontrados en DB2  
-- **`common_references`**: Valores que existen en ambas DBs
-- **`only_in_db1`**: Valores que solo están en DB1
-- **`only_in_db2`**: Valores que solo están en DB2
-
-### **Casos de Uso del Análisis de Referencias**
-
-1. **Auditoría de Datos**: Verificar qué IDs se están usando y dónde
-2. **Migración Segura**: Antes de eliminar registros, ver qué los referencia
-3. **Limpieza de Datos**: Encontrar referencias huérfanas o no utilizadas
-4. **Análisis de Impacto**: Entender el alcance de cambios en datos maestros
-5. **Sincronización**: Verificar consistencia de referencias entre ambientes
-
-### **Ejemplo Práctico**
-
-Si necesitas eliminar un concepto con `id = 25`, primero ejecutas:
-
+#### **Ejemplo 2: Migración Segura**
 ```bash
+# Antes de eliminar el concepto ID 25
 ./deepComparator -table=concepts -target-column=id -find-references
 ```
 
-El resultado te mostrará:
-- **`related_concepts`** tiene 3 referencias al concepto 25
-- **`billing_model`** tiene 1 referencia al concepto 25  
-- **`settlement_concepts_formula`** tiene 2 referencias al concepto 25
+**Si el resultado muestra:**
+```json
+{
+  "references": [
+    {
+      "table_name": "billing_model", 
+      "only_in_db1": [25],
+      "only_in_db2": []
+    },
+    {
+      "table_name": "settlement_formulas",
+      "common_references": [25]
+    }
+  ]
+}
+```
 
-Esto te permite:
-1. **Planificar** la limpieza de referencias antes de eliminar
-2. **Verificar** que las referencias son consistentes entre DBs
-3. **Documentar** el impacto del cambio
+**📖 Interpretación:**
+- ❌ **NO ELIMINAR** el concepto 25 todavía
+- 📋 **Acción requerida**: 
+  1. Limpiar referencia en `billing_model` de DB1
+  2. Coordinar eliminación en `settlement_formulas` de ambas DBs
+  3. Solo entonces eliminar el concepto 25
+
+#### **Ejemplo 3: Detección de Datos Huérfanos**
+```json
+{
+  "table_name": "user_permissions",
+  "db1_references": [1, 5, 99],
+  "db2_references": [1, 5],
+  "only_in_db1": [99]
+}
+```
+
+**📖 Interpretación:**
+- ⚠️ **Posible dato huérfano**: El usuario ID `99` tiene permisos en DB1 pero no en DB2
+- 🔍 **Investigar**: ¿El usuario 99 fue eliminado de DB2? ¿Debe eliminarse de DB1?
+
+### **🚨 Señales de Alerta a Buscar**
+
+| Patrón en JSON | Significado | Acción Recomendada |
+|----------------|-------------|-------------------|
+| `"only_in_db1": [...]` con valores | Referencias huérfanas en DB1 | Investigar y limpiar |
+| `"only_in_db2": [...]` con valores | Referencias huérfanas en DB2 | Investigar y sincronizar |
+| `"db1_references": null` | Tabla no existe en DB1 | Verificar migración de esquema |
+| `"db2_references": null` | Tabla no existe en DB2 | Verificar despliegue de esquema |
+| `"total_references": 0` | No hay datos activos | Normal para tablas vacías |
+| `"referencing_tables": 0` | No hay FKs apuntando a tabla | Verificar estructura de FKs |
 
 ## Algoritmo de Matching
 
@@ -801,6 +1008,7 @@ go vet ./...
 - **Datos**: No modifica datos, solo lectura y análisis
 
 ## 🛠️ Troubleshooting y Mejores Prácticas
+*📚 [Volver al índice](#-índice)*
 
 ### **🚨 Problemas Comunes**
 
@@ -958,5 +1166,12 @@ Incluir en el issue:
 4. **Agregar ejemplos** de cómo se usaría
 
 ---
+
+### 🧭 **Navegación Final**
+- **🏠 [Volver al Inicio](#-deep-database-comparator)** ↑
+- **📚 [Ver Índice Completo](#-índice)** 📋
+- **🚀 [Instalación Rápida](#-instalación-y-configuración)** ⚡
+- **📖 [Ejemplos de Uso](#-ejemplos-de-uso)** 💡
+- **🛠️ [Troubleshooting](#️-troubleshooting-y-mejores-prácticas)** 🔧
 
 **⭐ Si este proyecto te es útil, considera darle una estrella en GitHub para ayudar a otros desarrolladores a encontrarlo.**
