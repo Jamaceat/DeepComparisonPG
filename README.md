@@ -164,6 +164,7 @@ Encuentra todas las tablas que referencian una tabla/columna específica.
 | `-verbose` | Habilitar logging detallado | `false` |
 | `-find-references` | **Nuevo**: Encontrar todas las referencias a una tabla/columna | `false` |
 | `-target-column` | **Nuevo**: Columna objetivo para análisis de referencias | `id` |
+| `-max-workers` | **Nuevo**: Número máximo de workers concurrentes | `4` |
 
 ### **📚 Ejemplos de Uso**
 
@@ -197,6 +198,12 @@ Encuentra todas las tablas que referencian una tabla/columna específica.
 
 # Incluir claves primarias en la comparación
 ./deepComparator -table=billing_model -include-pk=true -verbose
+
+# Optimización de rendimiento con workers concurrentes
+./deepComparator -table=billing_model -max-workers=8 -verbose
+
+# Comparación rápida para bases de datos grandes
+./deepComparator -table=large_table -max-workers=16 -exclude-from-file=true -verbose
 
 # Especificar esquema y archivo de salida
 ./deepComparator -table=users -schema=auth -output=user_comparison.json -verbose
@@ -309,6 +316,65 @@ batch_processed_at
 - **Menos ruido**: Evita falsos positivos por diferencias en timestamps o versioning
 - **Configuración flexible**: Puedes agregar tus propias columnas de auditoría
 - **Control total**: Puedes desactivar la exclusión cuando sea necesario
+
+## **🚀 Optimización de Rendimiento**
+
+### **Procesamiento Concurrente**
+
+La aplicación incluye un sistema de **workers concurrentes** que mejora significativamente el rendimiento, especialmente para:
+
+- 📊 **Bases de datos grandes** con miles/millones de registros
+- 🔗 **Múltiples foreign keys** que requieren análisis paralelo
+- 📈 **Análisis de referencias** en múltiples tablas simultáneamente
+
+### **Configuración de Workers**
+
+```bash
+# Configuración por defecto (4 workers)
+./deepComparator -table=billing_model -verbose
+
+# Optimización para bases de datos pequeñas (1-2 workers)
+./deepComparator -table=billing_model -max-workers=2 -verbose
+
+# Optimización para bases de datos medianas (4-8 workers)
+./deepComparator -table=billing_model -max-workers=8 -verbose
+
+# Optimización para bases de datos grandes (8-16 workers)
+./deepComparator -table=large_table -max-workers=16 -verbose
+
+# Análisis de referencias con alta concurrencia
+./deepComparator -find-references -table=billing_model -max-workers=12 -verbose
+```
+
+### **Operaciones Paralelas**
+
+El sistema concurrente paraleliza las siguientes operaciones:
+
+1. **📥 Fetch de datos**: Obtención simultánea de datos de ambas bases de datos
+2. **🔗 Análisis de Foreign Keys**: Procesamiento paralelo de múltiples relaciones
+3. **📋 Análisis de referencias**: Búsqueda concurrente en múltiples tablas referenciadoras
+4. **⚡ Categorización de valores**: Procesamiento paralelo de comparaciones complejas
+
+### **Recomendaciones de Rendimiento**
+
+| Escenario | Tamaño de DB | Workers Recomendados | Comando |
+|-----------|--------------|---------------------|----------|
+| **Pequeña** | < 1K registros | 1-2 | `-max-workers=2` |
+| **Mediana** | 1K-100K registros | 4-8 | `-max-workers=8` |
+| **Grande** | 100K-1M registros | 8-16 | `-max-workers=16` |
+| **Muy Grande** | > 1M registros | 12-24 | `-max-workers=24` |
+
+### **Prueba de Rendimiento**
+
+Incluye una herramienta de testing de rendimiento:
+
+```bash
+# Compilar y ejecutar test de rendimiento
+cd cmd/performance_test
+go run main.go
+```
+
+Este test compara el rendimiento con diferentes números de workers para ayudarte a encontrar la configuración óptima para tu entorno.
 
 ## Ejemplo de Escenario
 
@@ -584,6 +650,12 @@ Encuentra todas las tablas que tienen foreign keys apuntando a una tabla/columna
 
 # Usar esquema específico
 ./deepComparator -table=users -schema=auth -find-references -verbose
+
+# Análisis de referencias con optimización de rendimiento
+./deepComparator -table=concepts -find-references -max-workers=12 -verbose
+
+# Análisis masivo para tablas con muchas referencias
+./deepComparator -table=main_catalog -find-references -max-workers=16 -verbose
 ```
 
 ### **Opciones Específicas**

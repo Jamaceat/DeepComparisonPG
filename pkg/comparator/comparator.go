@@ -7,21 +7,37 @@ import (
 	"strings"
 	"time"
 
+	"deepComparator/pkg/concurrent"
 	"deepComparator/pkg/database"
 	"deepComparator/pkg/models"
 )
 
 // Comparator handles the comparison logic between two databases
 type Comparator struct {
-	DB1 *database.Connection
-	DB2 *database.Connection
+	DB1              *database.Connection
+	DB2              *database.Connection
+	ConcurrentWorker *concurrent.ConcurrentComparator
+	MaxWorkers       int
 }
 
 // NewComparator creates a new comparator instance
 func NewComparator(db1, db2 *database.Connection) *Comparator {
+	maxWorkers := 4 // Default number of workers
 	return &Comparator{
-		DB1: db1,
-		DB2: db2,
+		DB1:              db1,
+		DB2:              db2,
+		ConcurrentWorker: concurrent.NewConcurrentComparator(db1, db2, maxWorkers),
+		MaxWorkers:       maxWorkers,
+	}
+}
+
+// NewConcurrentComparator creates a new comparator with specified worker count
+func NewConcurrentComparator(db1, db2 *database.Connection, maxWorkers int) *Comparator {
+	return &Comparator{
+		DB1:              db1,
+		DB2:              db2,
+		ConcurrentWorker: concurrent.NewConcurrentComparator(db1, db2, maxWorkers),
+		MaxWorkers:       maxWorkers,
 	}
 }
 
@@ -55,15 +71,10 @@ func (c *Comparator) CompareTable(schema, tableName string, criteria *models.Mat
 		return nil, fmt.Errorf("failed to get schema from DB2: %w", err)
 	}
 
-	// Get table data
-	data1, err := c.DB1.GetTableData(schema, tableName)
+	// Get table data using concurrent operations
+	data1, data2, _, err := c.ConcurrentWorker.ParallelDataFetch(schema, tableName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get data from DB1: %w", err)
-	}
-
-	data2, err := c.DB2.GetTableData(schema, tableName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get data from DB2: %w", err)
+		return nil, fmt.Errorf("failed to get data using parallel fetch: %w", err)
 	}
 
 	// Perform comparison
@@ -517,117 +528,14 @@ func (c *Comparator) getUniqueValues(values []interface{}) []interface{} {
 
 // FindReferences finds all references to a specific table/column across both databases
 func (c *Comparator) FindReferences(schema, tableName, columnName string) (*models.MatchReferenceResult, error) {
-	result := &models.MatchReferenceResult{
-		TargetTable:  tableName,
-		TargetSchema: schema,
-		TargetColumn: columnName,
-		Timestamp:    time.Now(),
-		References:   []models.ReferenceMatch{},
-	}
-
-	// Find all tables that reference this table/column in DB1
-	referencingTables1, err := c.DB1.GetReferencingTables(schema, tableName, columnName)
+	// Use parallel reference analysis for better performance
+	concurrentResult, err := c.ConcurrentWorker.ParallelReferenceAnalysis(schema, tableName, columnName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get referencing tables from DB1: %w", err)
+		return nil, fmt.Errorf("failed to perform parallel reference analysis: %w", err)
 	}
 
-	// Find all tables that reference this table/column in DB2
-	referencingTables2, err := c.DB2.GetReferencingTables(schema, tableName, columnName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get referencing tables from DB2: %w", err)
-	}
-
-	// Combine all referencing tables (union of both databases)
-	allReferencingTables := make(map[string]models.ForeignKey)
-
-	for _, fk := range referencingTables1 {
-		key := fmt.Sprintf("%s.%s.%s", fk.ReferencedSchema, fk.ReferencedTable, fk.ColumnName)
-		allReferencingTables[key] = fk
-	}
-
-	for _, fk := range referencingTables2 {
-		key := fmt.Sprintf("%s.%s.%s", fk.ReferencedSchema, fk.ReferencedTable, fk.ColumnName)
-		if _, exists := allReferencingTables[key]; !exists {
-			allReferencingTables[key] = fk
-		}
-	}
-
-	// Process each referencing table
-	for _, fk := range allReferencingTables {
-		refMatch := models.ReferenceMatch{
-			TableName:      fk.ReferencedTable,
-			Schema:         fk.ReferencedSchema,
-			ColumnName:     fk.ColumnName,
-			ConstraintName: fk.ConstraintName,
-		}
-
-		// Get values from DB1
-		values1, err1 := c.DB1.GetColumnValues(fk.ReferencedSchema, fk.ReferencedTable, fk.ColumnName)
-		if err1 != nil {
-			// Table might not exist in DB1, that's ok
-			values1 = []interface{}{}
-		}
-		refMatch.DB1References = values1
-
-		// Get values from DB2
-		values2, err2 := c.DB2.GetColumnValues(fk.ReferencedSchema, fk.ReferencedTable, fk.ColumnName)
-		if err2 != nil {
-			// Table might not exist in DB2, that's ok
-			values2 = []interface{}{}
-		}
-		refMatch.DB2References = values2
-
-		// Find common, only in DB1, and only in DB2
-		refMatch.CommonRefs, refMatch.OnlyInDB1, refMatch.OnlyInDB2 = c.categorizeValues(values1, values2)
-
-		result.References = append(result.References, refMatch)
-	}
-
-	// Update totals
-	result.ReferencingTables = len(result.References)
-	totalRefs := 0
-	for _, ref := range result.References {
-		totalRefs += len(ref.DB1References) + len(ref.DB2References)
-	}
-	result.TotalReferences = totalRefs
-
-	return result, nil
-}
-
-// categorizeValues separates values into common, only in first, only in second
-func (c *Comparator) categorizeValues(values1, values2 []interface{}) (common, onlyInFirst, onlyInSecond []interface{}) {
-	// Create maps for O(1) lookup
-	map1 := make(map[string]interface{})
-	map2 := make(map[string]interface{})
-
-	// Populate maps
-	for _, val := range values1 {
-		key := fmt.Sprintf("%v", val)
-		map1[key] = val
-	}
-
-	for _, val := range values2 {
-		key := fmt.Sprintf("%v", val)
-		map2[key] = val
-	}
-
-	// Find common values
-	for key, val := range map1 {
-		if _, exists := map2[key]; exists {
-			common = append(common, val)
-		} else {
-			onlyInFirst = append(onlyInFirst, val)
-		}
-	}
-
-	// Find values only in second
-	for key, val := range map2 {
-		if _, exists := map1[key]; !exists {
-			onlyInSecond = append(onlyInSecond, val)
-		}
-	}
-
-	return common, onlyInFirst, onlyInSecond
+	// Use the concurrent result directly as it's already complete
+	return concurrentResult, nil
 }
 
 // getExcludeColumnsFromFile loads exclude columns from file with error handling

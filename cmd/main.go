@@ -30,6 +30,7 @@ func main() {
 		verbose         = flag.Bool("verbose", false, "Enable verbose logging")
 		findReferences  = flag.Bool("find-references", false, "Find all references to a table/column instead of comparing")
 		targetColumn    = flag.String("target-column", "id", "Target column to find references for (used with -find-references)")
+		maxWorkers      = flag.Int("max-workers", 4, "Maximum number of concurrent workers for parallel operations (default: 4)")
 	)
 	flag.Parse()
 
@@ -64,7 +65,7 @@ func main() {
 
 	// Handle find-references mode
 	if *findReferences {
-		handleFindReferences(*envFile, *schemaName, *tableName, *targetColumn, *outputFile, *verbose)
+		handleFindReferences(*envFile, *schemaName, *tableName, *targetColumn, *outputFile, *verbose, *maxWorkers)
 		return
 	}
 
@@ -130,6 +131,7 @@ func main() {
 
 	if *verbose {
 		log.Printf("Comparison settings:")
+		log.Printf("  - Max concurrent workers: %d", *maxWorkers)
 		log.Printf("  - Include primary keys: %v", *includePK)
 		log.Printf("  - Exclude columns from file: %v", *excludeFromFile)
 		if *excludeFromFile {
@@ -148,8 +150,8 @@ func main() {
 		}
 	}
 
-	// Create comparator and perform comparison
-	comp := comparator.NewComparator(db1, db2)
+	// Create comparator with concurrent support
+	comp := comparator.NewConcurrentComparator(db1, db2, *maxWorkers)
 	result, err := comp.CompareTable(*schemaName, *tableName, criteria)
 	if err != nil {
 		log.Fatalf("Failed to compare table: %v", err)
@@ -255,9 +257,9 @@ func printSummary(result *models.ComparisonResult) {
 }
 
 // handleFindReferences handles the find-references mode
-func handleFindReferences(envFile, schemaName, tableName, targetColumn, outputFile string, verbose bool) {
+func handleFindReferences(envFile, schemaName, tableName, targetColumn, outputFile string, verbose bool, maxWorkers int) {
 	if verbose {
-		log.Printf("Finding references to %s.%s.%s", schemaName, tableName, targetColumn)
+		log.Printf("Finding references to %s.%s.%s with %d concurrent workers", schemaName, tableName, targetColumn, maxWorkers)
 	}
 
 	// Load configuration
@@ -291,8 +293,8 @@ func handleFindReferences(envFile, schemaName, tableName, targetColumn, outputFi
 		log.Printf("Connected to both databases successfully")
 	}
 
-	// Create comparator
-	comp := comparator.NewComparator(db1, db2)
+	// Create comparator with concurrent support
+	comp := comparator.NewConcurrentComparator(db1, db2, maxWorkers)
 
 	// Find references
 	result, err := comp.FindReferences(schemaName, tableName, targetColumn)
