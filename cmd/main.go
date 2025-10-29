@@ -31,6 +31,7 @@ func main() {
 		findReferences  = flag.Bool("find-references", false, "Find all references to a table/column instead of comparing")
 		targetColumn    = flag.String("target-column", "id", "Target column to find references for (used with -find-references)")
 		maxWorkers      = flag.Int("max-workers", 4, "Maximum number of concurrent workers for parallel operations (default: 4)")
+		decodeUUIDs     = flag.Bool("decode-uuids", true, "Decode Base64 encoded UUIDs in output for easier database searching (default: true)")
 	)
 	flag.Parse()
 
@@ -65,7 +66,7 @@ func main() {
 
 	// Handle find-references mode
 	if *findReferences {
-		handleFindReferences(*envFile, *schemaName, *tableName, *targetColumn, *outputFile, *verbose, *maxWorkers)
+		handleFindReferences(*envFile, *schemaName, *tableName, *targetColumn, *outputFile, *verbose, *maxWorkers, *decodeUUIDs)
 		return
 	}
 
@@ -132,6 +133,7 @@ func main() {
 	if *verbose {
 		log.Printf("Comparison settings:")
 		log.Printf("  - Max concurrent workers: %d", *maxWorkers)
+		log.Printf("  - Decode Base64 UUIDs: %v", *decodeUUIDs)
 		log.Printf("  - Include primary keys: %v", *includePK)
 		log.Printf("  - Exclude columns from file: %v", *excludeFromFile)
 		if *excludeFromFile {
@@ -150,8 +152,8 @@ func main() {
 		}
 	}
 
-	// Create comparator with concurrent support
-	comp := comparator.NewConcurrentComparator(db1, db2, *maxWorkers)
+	// Create comparator with concurrent support and UUID decoding
+	comp := comparator.NewComparatorWithUUIDDecoding(db1, db2, *maxWorkers, *decodeUUIDs)
 	result, err := comp.CompareTable(*schemaName, *tableName, criteria)
 	if err != nil {
 		log.Fatalf("Failed to compare table: %v", err)
@@ -257,9 +259,9 @@ func printSummary(result *models.ComparisonResult) {
 }
 
 // handleFindReferences handles the find-references mode
-func handleFindReferences(envFile, schemaName, tableName, targetColumn, outputFile string, verbose bool, maxWorkers int) {
+func handleFindReferences(envFile, schemaName, tableName, targetColumn, outputFile string, verbose bool, maxWorkers int, decodeUUIDs bool) {
 	if verbose {
-		log.Printf("Finding references to %s.%s.%s with %d concurrent workers", schemaName, tableName, targetColumn, maxWorkers)
+		log.Printf("Finding references to %s.%s.%s with %d concurrent workers (UUID decoding: %v)", schemaName, tableName, targetColumn, maxWorkers, decodeUUIDs)
 	}
 
 	// Load configuration
@@ -293,8 +295,8 @@ func handleFindReferences(envFile, schemaName, tableName, targetColumn, outputFi
 		log.Printf("Connected to both databases successfully")
 	}
 
-	// Create comparator with concurrent support
-	comp := comparator.NewConcurrentComparator(db1, db2, maxWorkers)
+	// Create comparator with concurrent support and UUID decoding
+	comp := comparator.NewComparatorWithUUIDDecoding(db1, db2, maxWorkers, decodeUUIDs)
 
 	// Find references
 	result, err := comp.FindReferences(schemaName, tableName, targetColumn)

@@ -12,12 +12,21 @@ import (
 	"deepComparator/pkg/models"
 )
 
+// convertBytesToString converts byte arrays to strings, keeping other types as-is
+func convertBytesToString(value interface{}) interface{} {
+	if byteArray, ok := value.([]byte); ok {
+		return string(byteArray)
+	}
+	return value
+}
+
 // Comparator handles the comparison logic between two databases
 type Comparator struct {
 	DB1              *database.Connection
 	DB2              *database.Connection
 	ConcurrentWorker *concurrent.ConcurrentComparator
 	MaxWorkers       int
+	UUIDDecoder      *models.UUIDDecoder
 }
 
 // NewComparator creates a new comparator instance
@@ -28,6 +37,7 @@ func NewComparator(db1, db2 *database.Connection) *Comparator {
 		DB2:              db2,
 		ConcurrentWorker: concurrent.NewConcurrentComparator(db1, db2, maxWorkers),
 		MaxWorkers:       maxWorkers,
+		UUIDDecoder:      models.NewUUIDDecoder(true), // Enabled by default
 	}
 }
 
@@ -38,6 +48,18 @@ func NewConcurrentComparator(db1, db2 *database.Connection, maxWorkers int) *Com
 		DB2:              db2,
 		ConcurrentWorker: concurrent.NewConcurrentComparator(db1, db2, maxWorkers),
 		MaxWorkers:       maxWorkers,
+		UUIDDecoder:      models.NewUUIDDecoder(true), // Enabled by default
+	}
+}
+
+// NewComparatorWithUUIDecoding creates a new comparator with UUID decoding option
+func NewComparatorWithUUIDDecoding(db1, db2 *database.Connection, maxWorkers int, decodeUUIDs bool) *Comparator {
+	return &Comparator{
+		DB1:              db1,
+		DB2:              db2,
+		ConcurrentWorker: concurrent.NewConcurrentComparator(db1, db2, maxWorkers),
+		MaxWorkers:       maxWorkers,
+		UUIDDecoder:      models.NewUUIDDecoder(decodeUUIDs),
 	}
 }
 
@@ -117,6 +139,9 @@ func (c *Comparator) CompareTable(schema, tableName string, criteria *models.Mat
 		fkResult := c.compareForeignKey(fk, data1, data2, criteria)
 		result.ForeignKeyResults = append(result.ForeignKeyResults, *fkResult)
 	}
+
+	// Process UUIDs if enabled
+	result = c.UUIDDecoder.ProcessComparisonResult(result)
 
 	return result, nil
 }
@@ -274,10 +299,14 @@ func (c *Comparator) compareRowsWithFK(row1, row2 models.TableRow, criteria *mod
 		}
 
 		if !exists1 || !exists2 || !reflect.DeepEqual(val1, val2) {
+			// Convert byte arrays to strings for consistent processing
+			db1Value := convertBytesToString(val1)
+			db2Value := convertBytesToString(val2)
+
 			colDiff := models.ColumnDifference{
 				ColumnName: col,
-				DB1Value:   val1,
-				DB2Value:   val2,
+				DB1Value:   db1Value,
+				DB2Value:   db2Value,
 			}
 
 			// Check if this column is a foreign key
@@ -533,6 +562,9 @@ func (c *Comparator) FindReferences(schema, tableName, columnName string) (*mode
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform parallel reference analysis: %w", err)
 	}
+
+	// Process UUIDs if enabled
+	concurrentResult = c.UUIDDecoder.ProcessMatchReferenceResult(concurrentResult)
 
 	// Use the concurrent result directly as it's already complete
 	return concurrentResult, nil

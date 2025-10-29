@@ -2,6 +2,7 @@ package models
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strings"
@@ -181,4 +182,260 @@ type MatchReferenceResult struct {
 	TotalReferences   int              `json:"total_references"`
 	ReferencingTables int              `json:"referencing_tables"`
 	References        []ReferenceMatch `json:"references"`
+}
+
+// UUIDDecoder provides functionality to decode Base64 encoded UUIDs
+type UUIDDecoder struct {
+	DecodeEnabled bool
+}
+
+// NewUUIDDecoder creates a new UUID decoder
+func NewUUIDDecoder(enabled bool) *UUIDDecoder {
+	return &UUIDDecoder{
+		DecodeEnabled: enabled,
+	}
+}
+
+// IsBase64UUID checks if a string looks like a Base64 encoded UUID
+func (u *UUIDDecoder) IsBase64UUID(value string) bool {
+	if !u.DecodeEnabled || len(value) == 0 {
+		return false
+	}
+
+	// Base64 encoded UUIDs are typically 48 characters long (36 chars UUID -> 48 chars base64)
+	// Allow some flexibility but be more specific
+	if len(value) < 44 || len(value) > 52 {
+		return false
+	}
+
+	// Check if it contains only valid Base64 characters
+	for _, char := range value {
+		if !((char >= 'A' && char <= 'Z') ||
+			(char >= 'a' && char <= 'z') ||
+			(char >= '0' && char <= '9') ||
+			char == '+' || char == '/' || char == '=') {
+			return false
+		}
+	}
+
+	// Try to decode and see if it looks like a UUID pattern
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return false
+	}
+
+	decodedStr := string(decoded)
+
+	// Check if decoded string looks like a UUID (36 characters with hyphens at right positions)
+	if len(decodedStr) == 36 &&
+		decodedStr[8] == '-' &&
+		decodedStr[13] == '-' &&
+		decodedStr[18] == '-' &&
+		decodedStr[23] == '-' {
+		return true
+	}
+
+	return false
+} // DecodeBase64UUID attempts to decode a Base64 string to UUID format
+func (u *UUIDDecoder) DecodeBase64UUID(encoded string) string {
+	if !u.DecodeEnabled || !u.IsBase64UUID(encoded) {
+		return encoded
+	} // Try to decode from Base64
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return encoded // Return original if decode fails
+	}
+
+	decodedStr := string(decoded)
+
+	// Check if decoded string looks like a UUID (36 characters with hyphens)
+	if len(decodedStr) == 36 &&
+		decodedStr[8] == '-' &&
+		decodedStr[13] == '-' &&
+		decodedStr[18] == '-' &&
+		decodedStr[23] == '-' {
+		return decodedStr
+	}
+
+	return encoded // Return original if doesn't look like UUID
+}
+
+// ProcessTableRow decodes UUIDs in a table row if enabled
+func (u *UUIDDecoder) ProcessTableRow(row TableRow) TableRow {
+	if !u.DecodeEnabled {
+		return row
+	}
+
+	processedRow := make(TableRow)
+	for key, value := range row {
+		if strValue, ok := value.(string); ok {
+			processedRow[key] = u.DecodeBase64UUID(strValue)
+		} else {
+			processedRow[key] = value
+		}
+	}
+
+	return processedRow
+}
+
+// ProcessComparisonResult processes a comparison result to decode UUIDs
+func (u *UUIDDecoder) ProcessComparisonResult(result *ComparisonResult) *ComparisonResult {
+	if !u.DecodeEnabled {
+		return result
+	}
+
+	// Process differences
+	for i, diff := range result.Differences {
+		// Process DB1 row
+		processedDB1Row := make(TableRow)
+		for key, value := range diff.DB1Row {
+			if strValue, ok := value.(string); ok {
+				decodedValue := u.DecodeBase64UUID(strValue)
+
+				processedDB1Row[key] = decodedValue
+			} else {
+				processedDB1Row[key] = value
+			}
+		}
+		result.Differences[i].DB1Row = processedDB1Row
+
+		// Process DB2 row
+		processedDB2Row := make(TableRow)
+		for key, value := range diff.DB2Row {
+			if strValue, ok := value.(string); ok {
+				processedDB2Row[key] = u.DecodeBase64UUID(strValue)
+			} else {
+				processedDB2Row[key] = value
+			}
+		}
+		result.Differences[i].DB2Row = processedDB2Row
+
+		// Process column differences
+		for j, colDiff := range diff.ColumnDifferences {
+
+			if db1StrValue, ok := colDiff.DB1Value.(string); ok {
+				result.Differences[i].ColumnDifferences[j].DB1Value = u.DecodeBase64UUID(db1StrValue)
+			}
+			if db2StrValue, ok := colDiff.DB2Value.(string); ok {
+				result.Differences[i].ColumnDifferences[j].DB2Value = u.DecodeBase64UUID(db2StrValue)
+			}
+		}
+	}
+
+	// Process only in DB1
+	for i, row := range result.OnlyInDB1 {
+		processedRow := make(TableRow)
+		for key, value := range row {
+			if strValue, ok := value.(string); ok {
+				processedRow[key] = u.DecodeBase64UUID(strValue)
+			} else {
+				processedRow[key] = value
+			}
+		}
+		result.OnlyInDB1[i] = processedRow
+	}
+
+	// Process only in DB2
+	for i, row := range result.OnlyInDB2 {
+		processedRow := make(TableRow)
+		for key, value := range row {
+			if strValue, ok := value.(string); ok {
+				processedRow[key] = u.DecodeBase64UUID(strValue)
+			} else {
+				processedRow[key] = value
+			}
+		}
+		result.OnlyInDB2[i] = processedRow
+	}
+
+	return result
+}
+
+// ProcessMatchReferenceResult processes a match reference result to decode UUIDs
+func (u *UUIDDecoder) ProcessMatchReferenceResult(result *MatchReferenceResult) *MatchReferenceResult {
+	if !u.DecodeEnabled {
+		return result
+	}
+
+	// Process each reference
+	for i := range result.References {
+		ref := &result.References[i]
+
+		// Process DB1 references
+		for j, val := range ref.DB1References {
+			// Convert bytes to string if needed
+			var strValue string
+			if byteArray, ok := val.([]byte); ok {
+				strValue = string(byteArray)
+			} else if str, ok := val.(string); ok {
+				strValue = str
+			} else {
+				continue // Skip non-string/non-byte values
+			}
+
+			ref.DB1References[j] = u.DecodeBase64UUID(strValue)
+		}
+
+		// Process DB2 references
+		for j, val := range ref.DB2References {
+			// Convert bytes to string if needed
+			var strValue string
+			if byteArray, ok := val.([]byte); ok {
+				strValue = string(byteArray)
+			} else if str, ok := val.(string); ok {
+				strValue = str
+			} else {
+				continue // Skip non-string/non-byte values
+			}
+
+			ref.DB2References[j] = u.DecodeBase64UUID(strValue)
+		}
+
+		// Process common references
+		for j, val := range ref.CommonRefs {
+			// Convert bytes to string if needed
+			var strValue string
+			if byteArray, ok := val.([]byte); ok {
+				strValue = string(byteArray)
+			} else if str, ok := val.(string); ok {
+				strValue = str
+			} else {
+				continue // Skip non-string/non-byte values
+			}
+
+			ref.CommonRefs[j] = u.DecodeBase64UUID(strValue)
+		}
+
+		// Process only in DB1
+		for j, val := range ref.OnlyInDB1 {
+			// Convert bytes to string if needed
+			var strValue string
+			if byteArray, ok := val.([]byte); ok {
+				strValue = string(byteArray)
+			} else if str, ok := val.(string); ok {
+				strValue = str
+			} else {
+				continue // Skip non-string/non-byte values
+			}
+
+			ref.OnlyInDB1[j] = u.DecodeBase64UUID(strValue)
+		}
+
+		// Process only in DB2
+		for j, val := range ref.OnlyInDB2 {
+			// Convert bytes to string if needed
+			var strValue string
+			if byteArray, ok := val.([]byte); ok {
+				strValue = string(byteArray)
+			} else if str, ok := val.(string); ok {
+				strValue = str
+			} else {
+				continue // Skip non-string/non-byte values
+			}
+
+			ref.OnlyInDB2[j] = u.DecodeBase64UUID(strValue)
+		}
+	}
+
+	return result
 }

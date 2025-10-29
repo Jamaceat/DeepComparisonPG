@@ -11,6 +11,7 @@ Una aplicación avanzada en Go para comparar profundamente datos entre dos bases
 - [⚙️ Configuración](#configuración)
 
 ### 🔧 **Uso de la Aplicación**
+- [🆔 Decodificación Automática de UUIDs](#-decodificación-automática-de-uuids)
 - [� Uso del Sistema](#-uso-del-sistema)
 - [�📋 Opciones Disponibles](#-opciones-disponibles)
 - [📚 Ejemplos de Uso](#-ejemplos-de-uso)
@@ -50,6 +51,7 @@ Una aplicación avanzada en Go para comparar profundamente datos entre dos bases
 | **Comparar tabla básica** | [Comparación de Datos](#-comparación-de-datos) | `./deepComparator -table=mi_tabla -verbose` |
 | **Excluir columnas audit** | [Exclusión de Columnas](#️-exclusión-de-columnas-por-archivo) | `./deepComparator -table=mi_tabla -exclude-from-file` |
 | **Ver qué referencia una tabla** | [Análisis de Referencias](#-análisis-de-referencias) | `./deepComparator -find-references -table=mi_tabla` |
+| **UUIDs legibles** | [Decodificación UUID](#-decodificación-automática-de-uuids) | `./deepComparator -table=mi_tabla -decode-uuids=true` |
 | **Mejorar rendimiento** | [Optimización](#-optimización-de-rendimiento) | `./deepComparator -table=mi_tabla -max-workers=8` |
 | **Solucionar errores** | [Troubleshooting](#️-troubleshooting-y-mejores-prácticas) | Ver sección de errores comunes |
 
@@ -64,6 +66,7 @@ Una aplicación avanzada en Go para comparar profundamente datos entre dos bases
 - **Análisis de Foreign Keys**: Incluye datos completos de tablas referenciadas en los resultados
 - **Detección Granular**: Identifica diferencias específicas por columna con contexto completo
 - **Exclusión Inteligente**: Sistema configurable para omitir columnas de auditoría o metadatos
+- **🆔 Decodificación UUID**: Convierte automáticamente UUIDs codificados en Base64 a formato legible para facilitar búsquedas en BD
 
 ### **🎯 Análisis de Referencias (Nuevo)**
 - **Mapeo Completo**: Encuentra todas las tablas que referencian una tabla/columna específica  
@@ -220,6 +223,7 @@ Encuentra todas las tablas que referencian una tabla/columna específica.
 | `-find-references` | **Nuevo**: Encontrar todas las referencias a una tabla/columna | `false` |
 | `-target-column` | **Nuevo**: Columna objetivo para análisis de referencias | `id` |
 | `-max-workers` | **Nuevo**: Número máximo de workers concurrentes | `4` |
+| `-decode-uuids` | **Nuevo**: Decodificar UUIDs Base64 para facilitar búsquedas en BD | `true` |
 
 ### **📚 Ejemplos de Uso**
 
@@ -372,6 +376,77 @@ batch_processed_at
 - **Configuración flexible**: Puedes agregar tus propias columnas de auditoría
 - **Control total**: Puedes desactivar la exclusión cuando sea necesario
 
+## **🆔 Decodificación Automática de UUIDs**
+*📚 [Volver al índice](#-índice)*
+
+### **¿Qué es la Decodificación UUID?**
+
+PostgreSQL a menudo almacena UUIDs en formato Base64, lo que los hace difíciles de leer y buscar. Por ejemplo:
+- **Base64**: `MDA5NTZjNGYtNDgzNS1iNjk4LTJkM2QtMDVlNWRjYzNlNzBl`
+- **UUID Legible**: `00956c4f-4835-b698-2d3d-05e5dcc3e70e`
+
+### **Funcionalidad Automática**
+
+**Por defecto**, la aplicación detecta y decodifica automáticamente UUIDs codificados en Base64 tanto en:
+
+✅ **Diferencias de Columnas**: Los valores en `column_differences` aparecen como UUIDs legibles
+✅ **Referencias de Foreign Keys**: Los valores en `db1_references`, `db2_references`, etc. se decodifican automáticamente
+✅ **Análisis de Referencias**: Todos los valores referenciados se muestran en formato UUID estándar
+
+### **Configuración**
+
+```bash
+# Por defecto está ACTIVADO (recomendado)
+./deepComparator -table=billing_model -verbose
+
+# Deshabilitar decodificación (para debugging)
+./deepComparator -table=billing_model -decode-uuids=false -verbose
+
+# Análisis de referencias con decodificación
+./deepComparator -find-references -table=concepts -decode-uuids=true -verbose
+```
+
+### **Beneficios**
+
+1. **🔍 Búsquedas Fáciles**: Puedes copiar los UUIDs directamente del JSON y usarlos en consultas SQL
+2. **📋 Legibilidad**: Los reportes son más fáciles de entender y revisar
+3. **🛠️ Debugging**: Facilita la identificación y resolución de problemas de datos
+4. **📊 Auditoría**: Los UUIDs legibles simplifican los procesos de auditoría
+
+### **Ejemplo Práctico**
+
+**Antes (con `-decode-uuids=false`):**
+```json
+{
+  "column_differences": [
+    {
+      "column_name": "id",
+      "db1_value": "MDA5NTZjNGYtNDgzNS1iNjk4LTJkM2QtMDVlNWRjYzNlNzBl",
+      "db2_value": "MTVkNjZhZDctOTllNC1iY2Q5LWFiMzUtZjY4YTEwMDc5YmJh"
+    }
+  ]
+}
+```
+
+**Después (con `-decode-uuids=true`, por defecto):**
+```json
+{
+  "column_differences": [
+    {
+      "column_name": "id", 
+      "db1_value": "00956c4f-4835-b698-2d3d-05e5dcc3e70e",
+      "db2_value": "15d66ad7-99e4-bcd9-ab35-f68a10079bba"
+    }
+  ]
+}
+```
+
+**Consulta SQL Directa:**
+```sql
+-- Ahora puedes buscar directamente con el UUID legible
+SELECT * FROM billing_model WHERE id = '00956c4f-4835-b698-2d3d-05e5dcc3e70e';
+```
+
 ## **🚀 Optimización de Rendimiento**
 *📚 [Volver al índice](#-índice)*
 
@@ -400,6 +475,9 @@ La aplicación incluye un sistema de **workers concurrentes** que mejora signifi
 
 # Análisis de referencias con alta concurrencia
 ./deepComparator -find-references -table=billing_model -max-workers=12 -verbose
+
+# Comparación con decodificación UUID deshabilitada (para debugging)
+./deepComparator -table=billing_model -decode-uuids=false -verbose
 ```
 
 ### **Operaciones Paralelas**
@@ -1045,6 +1123,18 @@ export DB1_SSL_MODE=require
 ./deepComparator -table=mytable -include="name,status,key_field"
 ```
 
+#### **"UUIDs aparecen codificados en Base64"**
+```bash
+# Verificar que decodificación esté habilitada (por defecto lo está)
+./deepComparator -table=mytable -decode-uuids=true -verbose
+
+# Para debugging, deshabilitar decodificación temporalmente
+./deepComparator -table=mytable -decode-uuids=false -verbose
+
+# En análisis de referencias
+./deepComparator -find-references -table=mytable -decode-uuids=true
+```
+
 ### **✅ Mejores Prácticas**
 
 #### **📊 Para Migraciones**
@@ -1133,11 +1223,13 @@ Este proyecto usa [Semantic Versioning](https://semver.org/):
 - **MINOR**: Nueva funcionalidad compatible con versiones anteriores  
 - **PATCH**: Corrección de bugs compatibles
 
-**Versión Actual**: `v1.2.0`
+**Versión Actual**: `v1.3.0`
 - ✅ Comparación profunda de datos con foreign keys
 - ✅ Análisis de referencias cruzadas  
 - ✅ Exclusión configurable de columnas
 - ✅ Salida JSON estructurada
+- ✅ **Nuevo**: Decodificación automática de UUIDs Base64 para facilitar búsquedas en BD
+- ✅ **Nuevo**: Procesamiento concurrente optimizado con workers configurables
 
 ## 📄 Licencia
 
