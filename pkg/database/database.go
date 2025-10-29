@@ -230,3 +230,101 @@ func (c *Connection) TableExists(schema, tableName string) (bool, error) {
 
 	return exists, nil
 }
+
+// GetReferencingTables finds all tables that have foreign keys pointing to the specified table/column
+func (c *Connection) GetReferencingTables(targetSchema, targetTable, targetColumn string) ([]models.ForeignKey, error) {
+	query := `
+		SELECT 
+			kcu.column_name,
+			kcu.table_name,
+			kcu.table_schema,
+			tc.constraint_name
+		FROM information_schema.key_column_usage kcu
+		JOIN information_schema.table_constraints tc 
+			ON kcu.constraint_name = tc.constraint_name 
+			AND kcu.table_schema = tc.table_schema
+		JOIN information_schema.referential_constraints rc 
+			ON tc.constraint_name = rc.constraint_name
+			AND tc.table_schema = rc.constraint_schema
+		JOIN information_schema.key_column_usage rcu 
+			ON rc.unique_constraint_name = rcu.constraint_name
+			AND rc.unique_constraint_schema = rcu.table_schema
+		WHERE tc.constraint_type = 'FOREIGN KEY'
+			AND rcu.table_schema = $1 
+			AND rcu.table_name = $2
+			AND rcu.column_name = $3
+		ORDER BY kcu.table_schema, kcu.table_name, kcu.column_name`
+
+	rows, err := c.DB.Query(query, targetSchema, targetTable, targetColumn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query referencing tables: %w", err)
+	}
+	defer rows.Close()
+
+	var foreignKeys []models.ForeignKey
+	for rows.Next() {
+		var fk models.ForeignKey
+		err := rows.Scan(
+			&fk.ColumnName,
+			&fk.ReferencedTable,  // This is actually the referencing table
+			&fk.ReferencedSchema, // This is actually the referencing schema
+			&fk.ConstraintName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan foreign key: %w", err)
+		}
+
+		// Set the actual referenced table/schema/column (our target)
+		actualReferencingTable := fk.ReferencedTable
+		actualReferencingSchema := fk.ReferencedSchema
+
+		fk.ReferencedTable = targetTable
+		fk.ReferencedSchema = targetSchema
+		fk.ReferencedColumnName = targetColumn
+
+		// Create a temporary ForeignKey with correct structure
+		referencingFK := models.ForeignKey{
+			ColumnName:           fk.ColumnName,
+			ReferencedTable:      actualReferencingTable,
+			ReferencedSchema:     actualReferencingSchema,
+			ReferencedColumnName: targetColumn,
+			ConstraintName:       fk.ConstraintName,
+		}
+
+		foreignKeys = append(foreignKeys, referencingFK)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating foreign key rows: %w", err)
+	}
+
+	return foreignKeys, nil
+}
+
+// GetColumnValues gets all distinct values from a specific column in a table
+func (c *Connection) GetColumnValues(schema, tableName, columnName string) ([]interface{}, error) {
+	query := fmt.Sprintf(`SELECT DISTINCT "%s" FROM "%s"."%s" WHERE "%s" IS NOT NULL ORDER BY "%s"`,
+		columnName, schema, tableName, columnName, columnName)
+
+	rows, err := c.DB.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query column values: %w", err)
+	}
+	defer rows.Close()
+
+	var values []interface{}
+	for rows.Next() {
+		var value interface{}
+		err := rows.Scan(&value)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan column value: %w", err)
+		}
+		values = append(values, value)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating column values: %w", err)
+	}
+
+	return values, nil
+}

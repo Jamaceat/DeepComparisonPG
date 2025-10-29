@@ -515,6 +515,121 @@ func (c *Comparator) getUniqueValues(values []interface{}) []interface{} {
 	return unique
 }
 
+// FindReferences finds all references to a specific table/column across both databases
+func (c *Comparator) FindReferences(schema, tableName, columnName string) (*models.MatchReferenceResult, error) {
+	result := &models.MatchReferenceResult{
+		TargetTable:  tableName,
+		TargetSchema: schema,
+		TargetColumn: columnName,
+		Timestamp:    time.Now(),
+		References:   []models.ReferenceMatch{},
+	}
+
+	// Find all tables that reference this table/column in DB1
+	referencingTables1, err := c.DB1.GetReferencingTables(schema, tableName, columnName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get referencing tables from DB1: %w", err)
+	}
+
+	// Find all tables that reference this table/column in DB2
+	referencingTables2, err := c.DB2.GetReferencingTables(schema, tableName, columnName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get referencing tables from DB2: %w", err)
+	}
+
+	// Combine all referencing tables (union of both databases)
+	allReferencingTables := make(map[string]models.ForeignKey)
+
+	for _, fk := range referencingTables1 {
+		key := fmt.Sprintf("%s.%s.%s", fk.ReferencedSchema, fk.ReferencedTable, fk.ColumnName)
+		allReferencingTables[key] = fk
+	}
+
+	for _, fk := range referencingTables2 {
+		key := fmt.Sprintf("%s.%s.%s", fk.ReferencedSchema, fk.ReferencedTable, fk.ColumnName)
+		if _, exists := allReferencingTables[key]; !exists {
+			allReferencingTables[key] = fk
+		}
+	}
+
+	// Process each referencing table
+	for _, fk := range allReferencingTables {
+		refMatch := models.ReferenceMatch{
+			TableName:      fk.ReferencedTable,
+			Schema:         fk.ReferencedSchema,
+			ColumnName:     fk.ColumnName,
+			ConstraintName: fk.ConstraintName,
+		}
+
+		// Get values from DB1
+		values1, err1 := c.DB1.GetColumnValues(fk.ReferencedSchema, fk.ReferencedTable, fk.ColumnName)
+		if err1 != nil {
+			// Table might not exist in DB1, that's ok
+			values1 = []interface{}{}
+		}
+		refMatch.DB1References = values1
+
+		// Get values from DB2
+		values2, err2 := c.DB2.GetColumnValues(fk.ReferencedSchema, fk.ReferencedTable, fk.ColumnName)
+		if err2 != nil {
+			// Table might not exist in DB2, that's ok
+			values2 = []interface{}{}
+		}
+		refMatch.DB2References = values2
+
+		// Find common, only in DB1, and only in DB2
+		refMatch.CommonRefs, refMatch.OnlyInDB1, refMatch.OnlyInDB2 = c.categorizeValues(values1, values2)
+
+		result.References = append(result.References, refMatch)
+	}
+
+	// Update totals
+	result.ReferencingTables = len(result.References)
+	totalRefs := 0
+	for _, ref := range result.References {
+		totalRefs += len(ref.DB1References) + len(ref.DB2References)
+	}
+	result.TotalReferences = totalRefs
+
+	return result, nil
+}
+
+// categorizeValues separates values into common, only in first, only in second
+func (c *Comparator) categorizeValues(values1, values2 []interface{}) (common, onlyInFirst, onlyInSecond []interface{}) {
+	// Create maps for O(1) lookup
+	map1 := make(map[string]interface{})
+	map2 := make(map[string]interface{})
+
+	// Populate maps
+	for _, val := range values1 {
+		key := fmt.Sprintf("%v", val)
+		map1[key] = val
+	}
+
+	for _, val := range values2 {
+		key := fmt.Sprintf("%v", val)
+		map2[key] = val
+	}
+
+	// Find common values
+	for key, val := range map1 {
+		if _, exists := map2[key]; exists {
+			common = append(common, val)
+		} else {
+			onlyInFirst = append(onlyInFirst, val)
+		}
+	}
+
+	// Find values only in second
+	for key, val := range map2 {
+		if _, exists := map1[key]; !exists {
+			onlyInSecond = append(onlyInSecond, val)
+		}
+	}
+
+	return common, onlyInFirst, onlyInSecond
+}
+
 // getExcludeColumnsFromFile loads exclude columns from file with error handling
 func (c *Comparator) getExcludeColumnsFromFile(criteria *models.MatchCriteria) ([]string, error) {
 	if !criteria.ExcludeColumnsFromFile {

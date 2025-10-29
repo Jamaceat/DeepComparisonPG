@@ -158,3 +158,27 @@ func (mc *MatchCriteria) GetAllExcludeColumns() []string {
 
 	return columns
 }
+
+// ReferenceMatch represents references found in different tables
+type ReferenceMatch struct {
+	TableName      string        `json:"table_name"`
+	Schema         string        `json:"schema"`
+	ColumnName     string        `json:"column_name"`
+	ConstraintName string        `json:"constraint_name,omitempty"`
+	DB1References  []interface{} `json:"db1_references"`
+	DB2References  []interface{} `json:"db2_references"`
+	CommonRefs     []interface{} `json:"common_references"`
+	OnlyInDB1      []interface{} `json:"only_in_db1"`
+	OnlyInDB2      []interface{} `json:"only_in_db2"`
+}
+
+// MatchReferenceResult represents the complete result of reference matching
+type MatchReferenceResult struct {
+	TargetTable       string           `json:"target_table"`
+	TargetSchema      string           `json:"target_schema"`
+	TargetColumn      string           `json:"target_column"`
+	Timestamp         time.Time        `json:"timestamp"`
+	TotalReferences   int              `json:"total_references"`
+	ReferencingTables int              `json:"referencing_tables"`
+	References        []ReferenceMatch `json:"references"`
+}

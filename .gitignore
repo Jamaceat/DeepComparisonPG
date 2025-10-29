@@ -1,3 +1,4 @@
 .env
 /.github
 comparison_result.json
+comparison_result_references.json

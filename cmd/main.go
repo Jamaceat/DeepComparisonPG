@@ -28,6 +28,8 @@ func main() {
 		excludeFile     = flag.String("exclude-file", "exclude_columns.txt", "File containing columns to exclude (one per line)")
 		showExcludeCols = flag.Bool("show-exclude-columns", false, "Show list of columns from exclude file and exit")
 		verbose         = flag.Bool("verbose", false, "Enable verbose logging")
+		findReferences  = flag.Bool("find-references", false, "Find all references to a table/column instead of comparing")
+		targetColumn    = flag.String("target-column", "id", "Target column to find references for (used with -find-references)")
 	)
 	flag.Parse()
 
@@ -58,6 +60,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: table name is required\n")
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	// Handle find-references mode
+	if *findReferences {
+		handleFindReferences(*envFile, *schemaName, *tableName, *targetColumn, *outputFile, *verbose)
+		return
 	}
 
 	// Load configuration
@@ -244,4 +252,119 @@ func printSummary(result *models.ComparisonResult) {
 	}
 
 	fmt.Printf("\n=========================\n")
+}
+
+// handleFindReferences handles the find-references mode
+func handleFindReferences(envFile, schemaName, tableName, targetColumn, outputFile string, verbose bool) {
+	if verbose {
+		log.Printf("Finding references to %s.%s.%s", schemaName, tableName, targetColumn)
+	}
+
+	// Load configuration
+	cfg, err := config.LoadConfig(envFile)
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Configuration validation failed: %v", err)
+	}
+
+	if verbose {
+		log.Printf("Loaded configuration from %s", envFile)
+	}
+
+	// Connect to databases
+	db1, err := database.NewConnection(cfg.Database1)
+	if err != nil {
+		log.Fatalf("Failed to connect to database 1: %v", err)
+	}
+	defer db1.Close()
+
+	db2, err := database.NewConnection(cfg.Database2)
+	if err != nil {
+		log.Fatalf("Failed to connect to database 2: %v", err)
+	}
+	defer db2.Close()
+
+	if verbose {
+		log.Printf("Connected to both databases successfully")
+	}
+
+	// Create comparator
+	comp := comparator.NewComparator(db1, db2)
+
+	// Find references
+	result, err := comp.FindReferences(schemaName, tableName, targetColumn)
+	if err != nil {
+		log.Fatalf("Failed to find references: %v", err)
+	}
+
+	if verbose {
+		log.Printf("Found references in %d tables", len(result.References))
+	}
+
+	// Determine output file
+	outputFileName := "match_reference_result.json"
+	if outputFile != "" {
+		outputFileName = outputFile
+	} else if cfg.OutputFile != "" {
+		// Change extension to indicate reference result
+		if strings.HasSuffix(cfg.OutputFile, ".json") {
+			outputFileName = strings.TrimSuffix(cfg.OutputFile, ".json") + "_references.json"
+		} else {
+			outputFileName = cfg.OutputFile + "_references.json"
+		}
+	}
+
+	// Write results to JSON file
+	jsonData, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		log.Fatalf("Failed to marshal result to JSON: %v", err)
+	}
+
+	err = os.WriteFile(outputFileName, jsonData, 0644)
+	if err != nil {
+		log.Fatalf("Failed to write result to file: %v", err)
+	}
+
+	fmt.Printf("Reference analysis results written to: %s\n", outputFileName)
+
+	// Print summary
+	printReferenceSummary(result)
+}
+
+// printReferenceSummary prints a summary of reference analysis results
+func printReferenceSummary(result *models.MatchReferenceResult) {
+	fmt.Printf("\n=== REFERENCE ANALYSIS SUMMARY ===\n")
+	fmt.Printf("Target: %s.%s.%s\n", result.TargetSchema, result.TargetTable, result.TargetColumn)
+	fmt.Printf("Timestamp: %s\n\n", result.Timestamp.Format("2006-01-02 15:04:05"))
+
+	fmt.Printf("--- Reference Counts ---\n")
+	fmt.Printf("Referencing tables: %d\n", result.ReferencingTables)
+	fmt.Printf("Total references found: %d\n\n", result.TotalReferences)
+
+	if len(result.References) == 0 {
+		fmt.Printf("No referencing tables found.\n")
+		fmt.Printf("This could mean:\n")
+		fmt.Printf("- No foreign keys point to %s.%s.%s\n", result.TargetSchema, result.TargetTable, result.TargetColumn)
+		fmt.Printf("- The table/column doesn't exist in one or both databases\n")
+		fmt.Printf("- The foreign key constraints are not properly defined\n")
+	} else {
+		fmt.Printf("--- References by Table ---\n")
+		for _, ref := range result.References {
+			fmt.Printf("Table: %s.%s (column: %s)\n", ref.Schema, ref.TableName, ref.ColumnName)
+			fmt.Printf("  DB1 values: %d\n", len(ref.DB1References))
+			fmt.Printf("  DB2 values: %d\n", len(ref.DB2References))
+			fmt.Printf("  Common: %d\n", len(ref.CommonRefs))
+			fmt.Printf("  Only in DB1: %d\n", len(ref.OnlyInDB1))
+			fmt.Printf("  Only in DB2: %d\n", len(ref.OnlyInDB2))
+			if ref.ConstraintName != "" {
+				fmt.Printf("  Constraint: %s\n", ref.ConstraintName)
+			}
+			fmt.Printf("\n")
+		}
+	}
+
+	fmt.Printf("=================================\n")
 }
