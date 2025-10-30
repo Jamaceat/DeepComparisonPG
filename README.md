@@ -51,6 +51,7 @@ Una aplicación avanzada en Go para comparar profundamente datos entre dos bases
 | **Comparar tabla básica** | [Comparación de Datos](#-comparación-de-datos) | `./deepComparator -table=mi_tabla -verbose` |
 | **Excluir columnas audit** | [Exclusión de Columnas](#️-exclusión-de-columnas-por-archivo) | `./deepComparator -table=mi_tabla -exclude-from-file` |
 | **Ver qué referencia una tabla** | [Análisis de Referencias](#-análisis-de-referencias) | `./deepComparator -find-references -table=mi_tabla` |
+| **🆕 Encontrar dónde se usa un ID** | [FK References](#-análisis-de-fk-references-nuevo) | `./deepComparator -table=concepts -id="89" -analyze-fk-references` |
 | **UUIDs legibles** | [Decodificación UUID](#-decodificación-automática-de-uuids) | `./deepComparator -table=mi_tabla -decode-uuids=true` |
 | **Mejorar rendimiento** | [Optimización](#-optimización-de-rendimiento) | `./deepComparator -table=mi_tabla -max-workers=8` |
 | **Solucionar errores** | [Troubleshooting](#️-troubleshooting-y-mejores-prácticas) | Ver sección de errores comunes |
@@ -73,6 +74,13 @@ Una aplicación avanzada en Go para comparar profundamente datos entre dos bases
 - **Análisis Cruzado**: Compara valores referenciados entre ambas bases de datos
 - **Categorización**: Clasifica referencias como comunes, solo en DB1, o solo en DB2
 - **Auditoría de Integridad**: Detecta referencias huérfanas o inconsistencias
+
+### **🔍 Análisis de FK References (Nuevo)**
+- **Búsqueda por ID**: Encuentra todas las tablas que referencian un ID específico como foreign key
+- **Soporte Universal**: Funciona con IDs numéricos y UUIDs  
+- **Conteo Preciso**: Cuenta matches exactos en ambas bases de datos
+- **Muestras de Datos**: Incluye samples de las referencias encontradas
+- **Salida Específica**: Archivo `id_matches_tables.json` dedicado
 
 ### **⚙️ Configuración Avanzada**
 - **Exclusión por Archivos**: Sistema basado en archivos para omitir columnas específicas
@@ -205,6 +213,13 @@ Encuentra todas las tablas que referencian una tabla/columna específica.
 ./deepComparator -table=<nombre_tabla> -find-references [opciones]
 ```
 
+### **🆔 Modo Análisis de FK References (Nuevo)**
+Encuentra todas las tablas que referencian un ID específico como foreign key.
+
+```bash
+./deepComparator -table=<nombre_tabla> -id=<valor_id> -analyze-fk-references [opciones]
+```
+
 ### **📋 Opciones Disponibles**
 
 | Opción | Descripción | Valor por defecto |
@@ -222,6 +237,8 @@ Encuentra todas las tablas que referencian una tabla/columna específica.
 | `-verbose` | Habilitar logging detallado | `false` |
 | `-find-references` | **Nuevo**: Encontrar todas las referencias a una tabla/columna | `false` |
 | `-target-column` | **Nuevo**: Columna objetivo para análisis de referencias | `id` |
+| `-analyze-fk-references` | **🆕 Nuevo**: Encontrar tablas que referencian un ID específico | `false` |
+| `-id` | **🆕 Nuevo**: ID específico a buscar en referencias FK (numérico o UUID) | - |
 | `-max-workers` | **Nuevo**: Número máximo de workers concurrentes | `4` |
 | `-decode-uuids` | **Nuevo**: Decodificar UUIDs Base64 para facilitar búsquedas en BD | `true` |
 
@@ -576,6 +593,71 @@ El resultado se genera en formato JSON estructurado. A continuación se explica 
 }
 ```
 
+### **🆔 Formato de Salida FK References - id_matches_tables.json**
+
+Para el análisis de FK References (`-analyze-fk-references`), se genera un archivo específico:
+
+```json
+{
+  "analysis_info": {
+    "table_name": "concepts",
+    "schema": "public", 
+    "target_id": "89",
+    "target_id_type": "integer",
+    "timestamp": "2024-01-15T10:30:00Z",
+    "execution_time_ms": 1250,
+    "fk_constraints_found": 3
+  },
+  "fk_constraints": [
+    {
+      "table": "transactions",
+      "schema": "public", 
+      "column": "concept_id",
+      "references": "concepts.id",
+      "constraint_name": "fk_transactions_concept_id"
+    }
+  ],
+  "reference_results": [
+    {
+      "referencing_table": {
+        "name": "transactions",
+        "schema": "public",
+        "column": "concept_id"
+      },
+      "matches_found": {
+        "total_db1": 7,
+        "total_db2": 7,
+        "matching_references": 7,
+        "different_references": 0
+      },
+      "sample_matches": [
+        {
+          "db1_row": {
+            "id": 145,
+            "concept_id": 89,
+            "amount": 1500.00,
+            "status": "completed"
+          },
+          "db2_row": {
+            "id": 145, 
+            "concept_id": 89,
+            "amount": 1500.00,
+            "status": "completed"
+          },
+          "is_identical": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_referencing_tables": 1,
+    "total_references_found": 7,
+    "all_references_match": true,
+    "has_differences": false
+  }
+}
+```
+
 ### **Sección `only_in_db1` / `only_in_db2`**
 
 Contienen las filas completas que existen solo en una base de datos:
@@ -791,6 +873,28 @@ Encuentra todas las tablas que tienen foreign keys apuntando a una tabla/columna
 
 # Análisis masivo para tablas con muchas referencias
 ./deepComparator -table=main_catalog -find-references -max-workers=16 -verbose
+```
+
+#### **🆔 Análisis de FK References (Nuevo)**
+
+```bash
+# Encontrar todas las tablas que referencian el ID 89 de concepts
+./deepComparator -table=concepts -id="89" -analyze-fk-references -verbose
+
+# Análisis con UUID específico
+./deepComparator -table=users -id="550e8400-e29b-41d4-a716-446655440000" -analyze-fk-references
+
+# Guardar resultado en archivo específico  
+./deepComparator -table=products -id="123" -analyze-fk-references -output=product_references.json
+
+# Análisis con esquema específico
+./deepComparator -table=categories -schema=catalog -id="45" -analyze-fk-references
+
+# Optimización para tablas con muchas referencias FK
+./deepComparator -table=concepts -id="89" -analyze-fk-references -max-workers=8 -verbose
+
+# Análisis sin decodificación UUID (para debugging)
+./deepComparator -table=accounts -id="encoded_uuid" -analyze-fk-references -decode-uuids=false
 ```
 
 ### **Opciones Específicas**
@@ -1145,6 +1249,66 @@ export DB1_SSL_MODE=require
 
 #### **🔍 Para Auditorías**
 1. **Configurar exclusiones** específicas por tipo de tabla
+
+#### **🆔 Para Análisis FK References**
+1. **Identificar registros críticos**: Usar con registros maestros importantes
+2. **Verificar integridad**: Asegurar que todas las referencias existen
+3. **Análisis de impacto**: Ver qué se afecta antes de eliminar datos
+4. **Debugging**: Encontrar dónde se usa un ID específico
+
+## 🎯 Casos de Uso Prácticos
+
+### **🔍 1. Análisis de Impacto antes de Eliminar**
+
+```bash
+# Antes de eliminar el concepto ID=89, ver qué tablas lo referencian
+./deepComparator -table=concepts -id="89" -analyze-fk-references -verbose
+
+# Revisar el resultado
+cat id_matches_tables.json | jq '.reference_results[].referencing_table.name'
+```
+
+### **🚚 2. Migración de Datos Maestros**
+
+```bash
+# 1. Verificar consistencia del maestro
+./deepComparator -table=concepts -verbose
+
+# 2. Analizar impacto de registros específicos
+./deepComparator -table=concepts -id="key_concept_id" -analyze-fk-references
+
+# 3. Comparar tablas dependientes
+./deepComparator -table=transactions -include="concept_id,amount,status" -verbose
+```
+
+### **🔎 3. Debugging de Integridad Referencial**
+
+```bash
+# Encontrar todas las referencias a un UUID específico
+./deepComparator -table=users -id="550e8400-e29b-41d4-a716-446655440000" -analyze-fk-references -decode-uuids=true
+
+# Ver resultado estructurado
+cat id_matches_tables.json | jq '.reference_results[] | {table: .referencing_table.name, matches: .matches_found.total_db1}'
+```
+
+### **📊 4. Auditoría Completa de Sistema**
+
+```bash
+#!/bin/bash
+# Script para auditar múltiples tablas críticas
+
+# 1. Tablas maestras principales
+for table in "concepts" "users" "categories"; do
+    echo "Comparing $table..."
+    ./deepComparator -table=$table -verbose -output="${table}_comparison.json"
+done
+
+# 2. Análisis de referencias para registros clave
+./deepComparator -table=concepts -id="main_concept" -analyze-fk-references -output="main_concept_references.json"
+
+# 3. Verificar foreign keys
+./deepComparator -table=transactions -find-references -verbose
+```
 2. **Usar análisis de referencias** para mapear dependencias
 3. **Ejecutar comparaciones regulares** en datos críticos
 4. **Archivar resultados** para análisis histórico

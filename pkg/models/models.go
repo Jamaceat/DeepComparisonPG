@@ -439,3 +439,24 @@ func (u *UUIDDecoder) ProcessMatchReferenceResult(result *MatchReferenceResult) 
 
 	return result
 }
+
+// FKTableReference represents a table that references a specific ID
+type FKTableReference struct {
+	Schema         string   `json:"schema"`
+	TableName      string   `json:"table_name"`
+	ColumnName     string   `json:"column_name"`
+	ConstraintName string   `json:"constraint_name"`
+	MatchesDB1     int      `json:"matches_db1"`
+	MatchesDB2     int      `json:"matches_db2"`
+	SampleRows     []string `json:"sample_rows,omitempty"`
+}
+
+// FKAnalysisResult represents the result of analyzing FK references for a specific ID
+type FKAnalysisResult struct {
+	TargetTable       string             `json:"target_table"`
+	TargetSchema      string             `json:"target_schema"`
+	TargetID          string             `json:"target_id"`
+	Timestamp         time.Time          `json:"timestamp"`
+	TotalConstraints  int                `json:"total_constraints"`
+	ReferencingTables []FKTableReference `json:"referencing_tables"`
+}

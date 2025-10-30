@@ -597,3 +597,159 @@ func (c *Comparator) getExcludeColumnsFromFile(criteria *models.MatchCriteria) (
 
 	return models.LoadExcludeColumnsFromFile(criteria.ExcludeColumnsFile)
 }
+
+// AnalyzeFKReferences finds all tables that reference a specific ID as foreign key
+func (c *Comparator) AnalyzeFKReferences(schema, tableName, targetID string) (*models.FKAnalysisResult, error) {
+	// Start connection progress
+	connProgress := progress.NewConnectionProgress("Connecting to databases for FK analysis")
+
+	// Get foreign keys that reference the target table
+	query := `
+		SELECT 
+			tc.constraint_name,
+			tc.table_schema,
+			tc.table_name,
+			kcu.column_name,
+			ccu.table_schema AS foreign_table_schema,
+			ccu.table_name AS foreign_table_name,
+			ccu.column_name AS foreign_column_name 
+		FROM information_schema.table_constraints AS tc 
+		JOIN information_schema.key_column_usage AS kcu
+			ON tc.constraint_name = kcu.constraint_name
+			AND tc.table_schema = kcu.table_schema
+		JOIN information_schema.constraint_column_usage AS ccu
+			ON ccu.constraint_name = tc.constraint_name
+			AND ccu.table_schema = tc.table_schema
+		WHERE tc.constraint_type = 'FOREIGN KEY' 
+			AND ccu.table_schema = $1 
+			AND ccu.table_name = $2
+		ORDER BY tc.table_schema, tc.table_name, kcu.column_name`
+
+	connProgress.Success("Connected successfully")
+
+	// Create loading progress for FK discovery
+	loadingProgress := progress.NewSimpleProgress("Discovering foreign key constraints")
+
+	rows1, err := c.DB1.DB.Query(query, schema, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query foreign keys from DB1: %w", err)
+	}
+	defer rows1.Close()
+
+	var fkConstraints []models.FKTableReference
+
+	// Process foreign key constraints
+	for rows1.Next() {
+		var constraintName, tableSchema, table, columnName string
+		var foreignTableSchema, foreignTableName, foreignColumnName string
+
+		err := rows1.Scan(&constraintName, &tableSchema, &table, &columnName,
+			&foreignTableSchema, &foreignTableName, &foreignColumnName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan foreign key constraint: %w", err)
+		}
+
+		fkConstraints = append(fkConstraints, models.FKTableReference{
+			Schema:         tableSchema,
+			TableName:      table,
+			ColumnName:     columnName,
+			ConstraintName: constraintName,
+		})
+	}
+
+	loadingProgress.Finish(fmt.Sprintf("Found %d foreign key constraints", len(fkConstraints)))
+
+	if len(fkConstraints) == 0 {
+		return &models.FKAnalysisResult{
+			TargetTable:       tableName,
+			TargetSchema:      schema,
+			TargetID:          targetID,
+			Timestamp:         time.Now(),
+			TotalConstraints:  0,
+			ReferencingTables: []models.FKTableReference{},
+		}, nil
+	}
+
+	// Create progress bar for analyzing references
+	analysisProgress := progress.NewProgressBar(int64(len(fkConstraints)), "Analyzing FK references")
+
+	// Now find references for each foreign key constraint
+	for i := range fkConstraints {
+		fk := &fkConstraints[i]
+
+		// Query both databases for references to the target ID
+		refQuery := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = $1 LIMIT 5",
+			fk.ColumnName, fk.Schema, fk.TableName, fk.ColumnName)
+
+		// Query DB1
+		rows1, err := c.DB1.DB.Query(refQuery, targetID)
+		if err == nil {
+			var samples []string
+			var count int
+			for rows1.Next() {
+				var value interface{}
+				if err := rows1.Scan(&value); err == nil {
+					if strVal := fmt.Sprintf("%v", convertBytesToString(value)); strVal != "" {
+						samples = append(samples, strVal)
+						count++
+					}
+				}
+			}
+			rows1.Close()
+			fk.MatchesDB1 = count
+
+			// Get full count
+			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s WHERE %s = $1",
+				fk.Schema, fk.TableName, fk.ColumnName)
+			if err := c.DB1.DB.QueryRow(countQuery, targetID).Scan(&fk.MatchesDB1); err != nil {
+				fk.MatchesDB1 = 0
+			}
+
+			if len(samples) > 0 {
+				fk.SampleRows = samples
+			}
+		}
+
+		// Query DB2
+		rows2, err := c.DB2.DB.Query(refQuery, targetID)
+		if err == nil {
+			var count int
+			for rows2.Next() {
+				var value interface{}
+				if err := rows2.Scan(&value); err == nil {
+					count++
+				}
+			}
+			rows2.Close()
+			fk.MatchesDB2 = count
+
+			// Get full count
+			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s WHERE %s = $1",
+				fk.Schema, fk.TableName, fk.ColumnName)
+			if err := c.DB2.DB.QueryRow(countQuery, targetID).Scan(&fk.MatchesDB2); err != nil {
+				fk.MatchesDB2 = 0
+			}
+		}
+
+		analysisProgress.Update(1)
+	}
+
+	analysisProgress.FinishWithMessage("Analysis completed successfully")
+
+	// Filter out constraints with no matches
+	var referencingTables []models.FKTableReference
+	for _, fk := range fkConstraints {
+		if fk.MatchesDB1 > 0 || fk.MatchesDB2 > 0 {
+			referencingTables = append(referencingTables, fk)
+		}
+	}
+
+	return &models.FKAnalysisResult{
+		TargetTable:       tableName,
+		TargetSchema:      schema,
+		TargetID:          targetID,
+		Timestamp:         time.Now(),
+		TotalConstraints:  len(fkConstraints),
+		ReferencingTables: referencingTables,
+	}, nil
+}

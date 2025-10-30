@@ -34,6 +34,8 @@ func main() {
 		maxWorkers      = flag.Int("max-workers", 4, "Maximum number of concurrent workers for parallel operations (default: 4)")
 		decodeUUIDs     = flag.Bool("decode-uuids", true, "Decode Base64 encoded UUIDs in output for easier database searching (default: true)")
 		progressDemo    = flag.Bool("progress-demo", false, "Run progress bar demonstration with simulated delays")
+		analyzeFKRefs   = flag.Bool("analyze-fk-references", false, "Find all tables that reference a specific ID as foreign key")
+		targetID        = flag.String("id", "", "The ID value to search for in foreign key references (required with -analyze-fk-references)")
 	)
 	flag.Parse()
 
@@ -74,6 +76,17 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: table name is required\n")
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	// Handle analyze-fk-references mode
+	if *analyzeFKRefs {
+		if *targetID == "" {
+			fmt.Fprintf(os.Stderr, "Error: ID value is required when using -analyze-fk-references\n")
+			fmt.Fprintf(os.Stderr, "Usage: -analyze-fk-references -table=<table> -id=<id_value>\n")
+			os.Exit(1)
+		}
+		handleAnalyzeFKReferences(*envFile, *schemaName, *tableName, *targetID, *outputFile, *verbose, *maxWorkers, *decodeUUIDs)
+		return
 	}
 
 	// Handle find-references mode
@@ -383,4 +396,121 @@ func printReferenceSummary(result *models.MatchReferenceResult) {
 	}
 
 	fmt.Printf("=================================\n")
+}
+
+// handleAnalyzeFKReferences handles the analyze-fk-references mode
+func handleAnalyzeFKReferences(envFile, schemaName, tableName, targetID, outputFile string, verbose bool, maxWorkers int, decodeUUIDs bool) {
+	if verbose {
+		log.Printf("Analyzing foreign key references for ID '%s' in table %s.%s with %d concurrent workers (UUID decoding: %v)",
+			targetID, schemaName, tableName, maxWorkers, decodeUUIDs)
+	}
+
+	// Load configuration
+	cfg, err := config.LoadConfig(envFile)
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Configuration validation failed: %v", err)
+	}
+
+	if verbose {
+		log.Printf("Loaded configuration from %s", envFile)
+	}
+
+	// Connect to databases
+	db1, err := database.NewConnection(cfg.Database1)
+	if err != nil {
+		log.Fatalf("Failed to connect to database 1: %v", err)
+	}
+	defer db1.Close()
+
+	db2, err := database.NewConnection(cfg.Database2)
+	if err != nil {
+		log.Fatalf("Failed to connect to database 2: %v", err)
+	}
+	defer db2.Close()
+
+	if verbose {
+		log.Printf("Connected to both databases successfully")
+	}
+
+	// Create comparator with concurrent support and UUID decoding
+	comp := comparator.NewComparatorWithUUIDDecoding(db1, db2, maxWorkers, decodeUUIDs)
+
+	// Analyze FK references
+	result, err := comp.AnalyzeFKReferences(schemaName, tableName, targetID)
+	if err != nil {
+		log.Fatalf("Failed to analyze FK references: %v", err)
+	}
+
+	if verbose {
+		log.Printf("Found references in %d tables", len(result.ReferencingTables))
+	}
+
+	// Determine output file
+	outputFileName := "id_matches_tables.json"
+	if outputFile != "" {
+		outputFileName = outputFile
+	}
+
+	// Write results to JSON file
+	jsonData, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		log.Fatalf("Failed to marshal result to JSON: %v", err)
+	}
+
+	err = os.WriteFile(outputFileName, jsonData, 0644)
+	if err != nil {
+		log.Fatalf("Failed to write result to file: %v", err)
+	}
+
+	fmt.Printf("FK reference analysis results written to: %s\n", outputFileName)
+
+	// Print summary
+	printFKAnalysisSummary(result)
+}
+
+// printFKAnalysisSummary prints a summary of FK analysis results
+func printFKAnalysisSummary(result *models.FKAnalysisResult) {
+	fmt.Printf("\n=== FK REFERENCE ANALYSIS SUMMARY ===\n")
+	fmt.Printf("Target: %s.%s (ID: %s)\n", result.TargetSchema, result.TargetTable, result.TargetID)
+	fmt.Printf("Timestamp: %s\n\n", result.Timestamp.Format("2006-01-02 15:04:05"))
+
+	fmt.Printf("--- Reference Counts ---\n")
+	fmt.Printf("Tables with references: %d\n", len(result.ReferencingTables))
+	fmt.Printf("Total FK constraints: %d\n\n", result.TotalConstraints)
+
+	if len(result.ReferencingTables) == 0 {
+		fmt.Printf("No foreign key references found for ID '%s' in table %s.%s.\n",
+			result.TargetID, result.TargetSchema, result.TargetTable)
+		fmt.Printf("This could mean:\n")
+		fmt.Printf("- No foreign keys reference this table\n")
+		fmt.Printf("- The ID value doesn't exist in referencing tables\n")
+		fmt.Printf("- Foreign key constraints are not properly defined\n")
+	} else {
+		fmt.Printf("--- Tables with References ---\n")
+		for _, ref := range result.ReferencingTables {
+			fmt.Printf("Table: %s.%s\n", ref.Schema, ref.TableName)
+			fmt.Printf("  Column: %s\n", ref.ColumnName)
+			fmt.Printf("  Constraint: %s\n", ref.ConstraintName)
+			fmt.Printf("  DB1 matches: %d\n", ref.MatchesDB1)
+			fmt.Printf("  DB2 matches: %d\n", ref.MatchesDB2)
+
+			if len(ref.SampleRows) > 0 {
+				fmt.Printf("  Sample references:\n")
+				for i, sample := range ref.SampleRows {
+					if i >= 3 { // Show only first 3 samples
+						fmt.Printf("    ... and %d more\n", len(ref.SampleRows)-3)
+						break
+					}
+					fmt.Printf("    %s\n", sample)
+				}
+			}
+			fmt.Printf("\n")
+		}
+	}
+
+	fmt.Printf("=====================================\n")
 }
