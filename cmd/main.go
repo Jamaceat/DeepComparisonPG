@@ -239,6 +239,11 @@ func ensureGeneratedPath(filename string) (string, error) {
 		return generatedDir, nil
 	}
 
+	// If filename already starts with "generated/", return it as-is
+	if strings.HasPrefix(filename, "generated/") {
+		return filename, nil
+	}
+
 	return fmt.Sprintf("%s/%s", generatedDir, filename), nil
 }
 

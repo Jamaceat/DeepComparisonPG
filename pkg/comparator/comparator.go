@@ -804,7 +804,8 @@ func (c *Comparator) AnalyzeFKReferences(schema, tableName, targetID string) (*m
 
 // discoverFKConstraints finds all foreign key constraints that reference a specific table
 func (c *Comparator) discoverFKConstraints(schema, tableName string) ([]models.FKTableReference, error) {
-	query := `
+	// Query to find all formal foreign key constraints that reference the target table
+	fkQuery := `
 		SELECT 
 			tc.constraint_name,
 			tc.table_schema,
@@ -823,7 +824,7 @@ func (c *Comparator) discoverFKConstraints(schema, tableName string) ([]models.F
 		ORDER BY tc.table_schema, tc.table_name, kcu.column_name`
 
 	// Use DB1 for schema information (both DBs should have same structure)
-	rows, err := c.DB1.DB.Query(query, schema, tableName)
+	rows, err := c.DB1.DB.Query(fkQuery, schema, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query foreign keys: %w", err)
 	}
@@ -831,7 +832,7 @@ func (c *Comparator) discoverFKConstraints(schema, tableName string) ([]models.F
 
 	var fkConstraints []models.FKTableReference
 
-	// Process foreign key constraints
+	// Process formal foreign key constraints
 	for rows.Next() {
 		var constraintName, tableSchema, table, columnName string
 
@@ -846,6 +847,52 @@ func (c *Comparator) discoverFKConstraints(schema, tableName string) ([]models.F
 			ColumnName:     columnName,
 			ConstraintName: constraintName,
 		})
+	}
+
+	// If no formal FK constraints found, look for potential FK relationships based on column naming patterns
+	// This handles cases where FK relationships exist at the data level but formal constraints are not defined
+	if len(fkConstraints) == 0 {
+		// Search for columns that might reference this table based on naming conventions
+		potentialFKQuery := `
+			SELECT DISTINCT 
+				'' as constraint_name,
+				c.table_schema,
+				c.table_name,
+				c.column_name
+			FROM information_schema.columns c
+			WHERE c.table_schema = $1 
+				AND c.column_name = $2
+				AND c.table_name != $3`
+
+		// Try common patterns: table_name + '_id'
+		columnPatterns := []string{
+			tableName + "_id",
+			tableName + "Id",
+			tableName + "_ID",
+		}
+
+		for _, pattern := range columnPatterns {
+			rows, err := c.DB1.DB.Query(potentialFKQuery, schema, pattern, tableName)
+			if err != nil {
+				continue
+			}
+
+			for rows.Next() {
+				var constraintName, tableSchema, table, columnName string
+				err := rows.Scan(&constraintName, &tableSchema, &table, &columnName)
+				if err != nil {
+					continue
+				}
+
+				fkConstraints = append(fkConstraints, models.FKTableReference{
+					Schema:         tableSchema,
+					TableName:      table,
+					ColumnName:     columnName,
+					ConstraintName: fmt.Sprintf("potential_fk_%s_%s_%s", tableSchema, table, columnName),
+				})
+			}
+			rows.Close()
+		}
 	}
 
 	return fkConstraints, nil

@@ -266,8 +266,10 @@ func (c *Connection) TableExists(schema, tableName string) (bool, error) {
 }
 
 // GetReferencingTables finds all tables that have foreign keys pointing to the specified table/column
+// Uses hybrid approach: formal FK constraints first, then column pattern detection
 func (c *Connection) GetReferencingTables(targetSchema, targetTable, targetColumn string) ([]models.ForeignKey, error) {
-	query := `
+	// First, try to find formal FK constraints
+	fkQuery := `
 		SELECT 
 			kcu.column_name,
 			kcu.table_name,
@@ -289,7 +291,7 @@ func (c *Connection) GetReferencingTables(targetSchema, targetTable, targetColum
 			AND rcu.column_name = $3
 		ORDER BY kcu.table_schema, kcu.table_name, kcu.column_name`
 
-	rows, err := c.DB.Query(query, targetSchema, targetTable, targetColumn)
+	rows, err := c.DB.Query(fkQuery, targetSchema, targetTable, targetColumn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query referencing tables: %w", err)
 	}
@@ -330,6 +332,59 @@ func (c *Connection) GetReferencingTables(targetSchema, targetTable, targetColum
 
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating foreign key rows: %w", err)
+	}
+
+	// If no formal FK constraints found, look for potential FK relationships based on column naming patterns
+	// This handles cases where FK relationships exist at the data level but formal constraints are not defined
+	if len(foreignKeys) == 0 {
+		// Search for columns that might reference this table based on naming conventions
+		// For now, focus on the primary key column (usually 'id') being referenced by table_name + '_id'
+		if targetColumn == "id" {
+			potentialFKQuery := `
+				SELECT DISTINCT 
+					c.column_name,
+					c.table_name,
+					c.table_schema,
+					'' as constraint_name
+				FROM information_schema.columns c
+				WHERE c.table_schema = $1 
+					AND c.column_name = $2
+					AND c.table_name != $3`
+
+			// Try common patterns for referencing the target table
+			columnPatterns := []string{
+				targetTable + "_id",
+				targetTable + "Id",
+				targetTable + "_ID",
+			}
+
+			for _, pattern := range columnPatterns {
+				patternRows, err := c.DB.Query(potentialFKQuery, targetSchema, pattern, targetTable)
+				if err != nil {
+					continue
+				}
+
+				for patternRows.Next() {
+					var columnName, tableName, tableSchema, constraintName string
+					err := patternRows.Scan(&columnName, &tableName, &tableSchema, &constraintName)
+					if err != nil {
+						continue
+					}
+
+					// Create a potential FK reference
+					potentialFK := models.ForeignKey{
+						ColumnName:           columnName,
+						ReferencedTable:      tableName,
+						ReferencedSchema:     tableSchema,
+						ReferencedColumnName: targetColumn,
+						ConstraintName:       fmt.Sprintf("potential_fk_%s_%s_%s", tableSchema, tableName, columnName),
+					}
+
+					foreignKeys = append(foreignKeys, potentialFK)
+				}
+				patternRows.Close()
+			}
+		}
 	}
 
 	return foreignKeys, nil
