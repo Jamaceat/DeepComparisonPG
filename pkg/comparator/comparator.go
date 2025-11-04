@@ -609,6 +609,10 @@ func (c *Comparator) AnalyzeFKReferences(schema, tableName, targetID string) (*m
 	}
 
 	// Query to find all foreign key constraints that reference the target table
+	// This query looks for FK constraints where:
+	// - tc = table with the FK constraint (source table)
+	// - kcu = column info for the FK constraint
+	// - ccu = referenced table info (target table we're looking for)
 	fkQuery := `
 		SELECT 
 			tc.constraint_name,
@@ -663,6 +667,7 @@ func (c *Comparator) AnalyzeFKReferences(schema, tableName, targetID string) (*m
 	}
 
 	// If no formal FK constraints found, look for potential FK relationships based on column naming patterns
+	// This handles cases where FK relationships exist at the data level but formal constraints are not defined
 	if len(fkConstraints) == 0 {
 		// Search for columns that might reference this table based on naming conventions
 		potentialFKQuery := `
