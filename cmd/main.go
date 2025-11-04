@@ -36,6 +36,10 @@ func main() {
 		progressDemo    = flag.Bool("progress-demo", false, "Run progress bar demonstration with simulated delays")
 		analyzeFKRefs   = flag.Bool("analyze-fk-references", false, "Find all tables that reference a specific ID as foreign key")
 		targetID        = flag.String("id", "", "The ID value to search for in foreign key references (required with -analyze-fk-references)")
+		generateScript  = flag.Bool("generate-update-script", false, "Generate SQL script to update foreign key references and delete original record")
+		sourceDB        = flag.String("source-db", "db1", "Source database for script generation: 'db1' or 'db2' (default: db1)")
+		idTarget        = flag.String("id-target", "", "Target ID to be replaced (required with -generate-update-script)")
+		idDestination   = flag.String("id-destination", "", "Destination ID to replace with (required with -generate-update-script)")
 	)
 	flag.Parse()
 
@@ -76,6 +80,27 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: table name is required\n")
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	// Handle generate-update-script mode
+	if *generateScript {
+		if *sourceDB != "db1" && *sourceDB != "db2" {
+			fmt.Fprintf(os.Stderr, "Error: source-db must be 'db1' or 'db2' when using -generate-update-script\n")
+			fmt.Fprintf(os.Stderr, "Usage: -generate-update-script -table=<table> [-source-db=<db1|db2>] -id-target=<id> -id-destination=<id>\n")
+			os.Exit(1)
+		}
+		if *idTarget == "" {
+			fmt.Fprintf(os.Stderr, "Error: id-target is required when using -generate-update-script\n")
+			fmt.Fprintf(os.Stderr, "Usage: -generate-update-script -table=<table> [-source-db=<db1|db2>] -id-target=<id> -id-destination=<id>\n")
+			os.Exit(1)
+		}
+		if *idDestination == "" {
+			fmt.Fprintf(os.Stderr, "Error: id-destination is required when using -generate-update-script\n")
+			fmt.Fprintf(os.Stderr, "Usage: -generate-update-script -table=<table> [-source-db=<db1|db2>] -id-target=<id> -id-destination=<id>\n")
+			os.Exit(1)
+		}
+		handleGenerateUpdateScript(*envFile, *schemaName, *tableName, *sourceDB, *idTarget, *idDestination, *outputFile, *verbose, *maxWorkers)
+		return
 	}
 
 	// Handle analyze-fk-references mode
@@ -200,6 +225,23 @@ func main() {
 	printSummary(result)
 }
 
+// ensureGeneratedPath creates the generated directory if it doesn't exist and returns the full path
+func ensureGeneratedPath(filename string) (string, error) {
+	generatedDir := "generated"
+
+	// Create generated directory if it doesn't exist
+	if err := os.MkdirAll(generatedDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create generated directory: %w", err)
+	}
+
+	// If filename is empty, return just the directory
+	if filename == "" {
+		return generatedDir, nil
+	}
+
+	return fmt.Sprintf("%s/%s", generatedDir, filename), nil
+}
+
 // outputResults writes the comparison results to a file
 func outputResults(result *models.ComparisonResult, outputFile, format string) error {
 	var data []byte
@@ -221,11 +263,17 @@ func outputResults(result *models.ComparisonResult, outputFile, format string) e
 		return nil
 	}
 
-	if err := os.WriteFile(outputFile, data, 0644); err != nil {
+	// Ensure output file is in generated directory
+	outputPath, err := ensureGeneratedPath(outputFile)
+	if err != nil {
+		return fmt.Errorf("failed to prepare output path: %w", err)
+	}
+
+	if err := os.WriteFile(outputPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write output file: %w", err)
 	}
 
-	fmt.Printf("Results written to: %s\n", outputFile)
+	fmt.Printf("Results written to: %s\n", outputPath)
 	return nil
 }
 
@@ -352,12 +400,18 @@ func handleFindReferences(envFile, schemaName, tableName, targetColumn, outputFi
 		log.Fatalf("Failed to marshal result to JSON: %v", err)
 	}
 
-	err = os.WriteFile(outputFileName, jsonData, 0644)
+	// Ensure output file is in generated directory
+	outputPath, err := ensureGeneratedPath(outputFileName)
+	if err != nil {
+		log.Fatalf("Failed to prepare output path: %v", err)
+	}
+
+	err = os.WriteFile(outputPath, jsonData, 0644)
 	if err != nil {
 		log.Fatalf("Failed to write result to file: %v", err)
 	}
 
-	fmt.Printf("Reference analysis results written to: %s\n", outputFileName)
+	fmt.Printf("Reference analysis results written to: %s\n", outputPath)
 
 	// Print summary
 	printReferenceSummary(result)
@@ -461,12 +515,18 @@ func handleAnalyzeFKReferences(envFile, schemaName, tableName, targetID, outputF
 		log.Fatalf("Failed to marshal result to JSON: %v", err)
 	}
 
-	err = os.WriteFile(outputFileName, jsonData, 0644)
+	// Ensure output file is in generated directory
+	outputPath, err := ensureGeneratedPath(outputFileName)
+	if err != nil {
+		log.Fatalf("Failed to prepare output path: %v", err)
+	}
+
+	err = os.WriteFile(outputPath, jsonData, 0644)
 	if err != nil {
 		log.Fatalf("Failed to write result to file: %v", err)
 	}
 
-	fmt.Printf("FK reference analysis results written to: %s\n", outputFileName)
+	fmt.Printf("FK reference analysis results written to: %s\n", outputPath)
 
 	// Print summary
 	printFKAnalysisSummary(result)
@@ -513,4 +573,100 @@ func printFKAnalysisSummary(result *models.FKAnalysisResult) {
 	}
 
 	fmt.Printf("=====================================\n")
+}
+
+func handleGenerateUpdateScript(envFile, schemaName, tableName, sourceDB, idTarget, idDestination, outputFile string, verbose bool, maxWorkers int) {
+	if verbose {
+		fmt.Printf("🔧 Generating UPDATE script for FK references\n")
+		fmt.Printf("Target table: %s.%s\n", schemaName, tableName)
+		fmt.Printf("Source database: %s\n", sourceDB)
+		fmt.Printf("Target ID: %s -> Destination ID: %s\n", idTarget, idDestination)
+		fmt.Printf("\n")
+	}
+
+	// Load configuration
+	cfg, err := config.LoadConfig(envFile)
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Configuration validation failed: %v", err)
+	}
+
+	// Connect to the specified source database
+	var db *database.Connection
+	var dbName string
+
+	if sourceDB == "db1" {
+		db, err = database.NewConnection(cfg.Database1)
+		dbName = "Database 1"
+	} else {
+		db, err = database.NewConnection(cfg.Database2)
+		dbName = "Database 2"
+	}
+
+	if err != nil {
+		log.Fatalf("Failed to connect to %s: %v", dbName, err)
+	}
+	defer db.Close()
+
+	if verbose {
+		log.Printf("Connected to %s successfully", dbName)
+	}
+
+	// Create comparator instance (we only need one database for this operation)
+	comp := comparator.NewComparator(db, nil) // Generate the update script
+	script, err := comp.GenerateUpdateScript(schemaName, tableName, idTarget, idDestination)
+	if err != nil {
+		log.Fatalf("Failed to generate update script: %v", err)
+	}
+
+	// Determine output file name
+	scriptFile := "update_fk_references.sql"
+	if outputFile != "" {
+		// Replace extension or add .sql
+		if strings.HasSuffix(outputFile, ".json") {
+			scriptFile = strings.TrimSuffix(outputFile, ".json") + ".sql"
+		} else if strings.HasSuffix(outputFile, ".sql") {
+			scriptFile = outputFile
+		} else {
+			scriptFile = outputFile + ".sql"
+		}
+	}
+
+	// Ensure script file is in generated directory
+	scriptPath, err := ensureGeneratedPath(scriptFile)
+	if err != nil {
+		log.Fatalf("Failed to prepare script path: %v", err)
+	}
+
+	// Write script to file
+	err = os.WriteFile(scriptPath, []byte(script), 0644)
+	if err != nil {
+		log.Fatalf("Failed to write script to file %s: %v", scriptPath, err)
+	}
+
+	// Print summary
+	fmt.Printf("\n🎯 UPDATE Script Generation Complete!\n")
+	fmt.Printf("=====================================\n")
+	fmt.Printf("Script file: %s\n", scriptPath)
+	fmt.Printf("Target table: %s.%s\n", schemaName, tableName)
+	fmt.Printf("Source database: %s\n", dbName)
+	fmt.Printf("Operation: Update FK %s -> %s\n", idTarget, idDestination)
+	fmt.Printf("\n")
+	fmt.Printf("⚠️  WARNING: Review the script before execution!\n")
+	fmt.Printf("This script will:\n")
+	fmt.Printf("  1. Update all foreign key references\n")
+	fmt.Printf("  2. Delete the original record (%s)\n", idTarget)
+	fmt.Printf("\n")
+	fmt.Printf("To execute: psql -d <database> -f %s\n", scriptPath)
+	fmt.Printf("=====================================\n")
+
+	if verbose {
+		fmt.Printf("\nScript content:\n")
+		fmt.Printf("----------------------------------------\n")
+		fmt.Printf("%s\n", script)
+		fmt.Printf("----------------------------------------\n")
+	}
 }

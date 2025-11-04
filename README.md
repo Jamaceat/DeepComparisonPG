@@ -2,6 +2,8 @@
 
 Una aplicación avanzada en Go para comparar profundamente datos entre dos bases de datos PostgreSQL, incluyendo análisis completo de foreign keys, detección de diferencias a nivel de registro, y análisis de referencias cruzadas.
 
+> **📁 Organización de Archivos**: Todos los archivos generados (JSON, SQL) se almacenan automáticamente en la carpeta `generated/` para mantener el proyecto organizado.
+
 ## 📚 Índice
 
 ### 🚀 **Inicio Rápido**
@@ -52,6 +54,7 @@ Una aplicación avanzada en Go para comparar profundamente datos entre dos bases
 | **Excluir columnas audit** | [Exclusión de Columnas](#️-exclusión-de-columnas-por-archivo) | `./deepComparator -table=mi_tabla -exclude-from-file` |
 | **Ver qué referencia una tabla** | [Análisis de Referencias](#-análisis-de-referencias) | `./deepComparator -find-references -table=mi_tabla` |
 | **🆕 Encontrar dónde se usa un ID** | [FK References](#-análisis-de-fk-references-nuevo) | `./deepComparator -table=concepts -id="89" -analyze-fk-references` |
+| **🆕 Generar script UPDATE FK** | [Update Script](#-generación-de-scripts-update-nuevo) | `./deepComparator -table=concepts -source-db=db1 -id-target=89 -id-destination=90 -generate-update-script` |
 | **UUIDs legibles** | [Decodificación UUID](#-decodificación-automática-de-uuids) | `./deepComparator -table=mi_tabla -decode-uuids=true` |
 | **Mejorar rendimiento** | [Optimización](#-optimización-de-rendimiento) | `./deepComparator -table=mi_tabla -max-workers=8` |
 | **Solucionar errores** | [Troubleshooting](#️-troubleshooting-y-mejores-prácticas) | Ver sección de errores comunes |
@@ -82,14 +85,23 @@ Una aplicación avanzada en Go para comparar profundamente datos entre dos bases
 - **Muestras de Datos**: Incluye samples de las referencias encontradas
 - **Salida Específica**: Archivo `id_matches_tables.json` dedicado
 
+### **🔧 Generación de Scripts UPDATE (Nuevo)**
+- **Scripts SQL Seguros**: Genera transacciones completas con UPDATE y DELETE
+- **Actualización de FK**: Reemplaza automáticamente todas las referencias de foreign key
+- **Selección de BD**: Elige qué base de datos usar como fuente para el análisis
+- **Validación Completa**: Verifica constraints antes de generar el script
+- **Documentación Integrada**: Scripts autocomentados con información de origen y destino
+
 ### **⚙️ Configuración Avanzada**
 - **Exclusión por Archivos**: Sistema basado en archivos para omitir columnas específicas
 - **Criterios Personalizados**: Control granular sobre qué columnas incluir/excluir
 - **Múltiples Esquemas**: Soporte para esquemas específicos de PostgreSQL
 - **Configuración por Entorno**: Archivos .env separados para diferentes ambientes
+- **Organización Automática**: Todos los archivos generados se almacenan en `generated/`
 
 ### **📊 Salida Estructurada**
 - **JSON Detallado**: Reportes completos con información de foreign keys
+- **Organización Automática**: Todos los archivos se generan en carpeta `generated/`
 - **Dos Modos**: Comparación normal y análisis de referencias
 - **Métricas Completas**: Estadísticas detalladas de matches, diferencias y referencias
 - **Información Contextual**: Datos completos de filas referenciadas, no solo IDs
@@ -220,6 +232,13 @@ Encuentra todas las tablas que referencian un ID específico como foreign key.
 ./deepComparator -table=<nombre_tabla> -id=<valor_id> -analyze-fk-references [opciones]
 ```
 
+### **🔧 Modo Generación de Scripts UPDATE (Nuevo)**
+Genera un script SQL para actualizar todas las foreign keys de un ID objetivo a un ID destino y eliminar el registro original.
+
+```bash
+./deepComparator -table=<nombre_tabla> [-source-db=<db1|db2>] -id-target=<id_origen> -id-destination=<id_destino> -generate-update-script [opciones]
+```
+
 ### **📋 Opciones Disponibles**
 
 | Opción | Descripción | Valor por defecto |
@@ -239,6 +258,10 @@ Encuentra todas las tablas que referencian un ID específico como foreign key.
 | `-target-column` | **Nuevo**: Columna objetivo para análisis de referencias | `id` |
 | `-analyze-fk-references` | **🆕 Nuevo**: Encontrar tablas que referencian un ID específico | `false` |
 | `-id` | **🆕 Nuevo**: ID específico a buscar en referencias FK (numérico o UUID) | - |
+| `-generate-update-script` | **🆕 Nuevo**: Generar script SQL para actualizar FK y eliminar registro | `false` |
+| `-source-db` | **🆕 Nuevo**: Base de datos fuente ('db1' o 'db2') para análisis de script | `db1` |
+| `-id-target` | **🆕 Nuevo**: ID objetivo que será reemplazado | - |
+| `-id-destination` | **🆕 Nuevo**: ID destino que reemplazará al objetivo | - |
 | `-max-workers` | **Nuevo**: Número máximo de workers concurrentes | `4` |
 | `-decode-uuids` | **Nuevo**: Decodificar UUIDs Base64 para facilitar búsquedas en BD | `true` |
 
@@ -257,7 +280,7 @@ Encuentra todas las tablas que referencian un ID específico como foreign key.
 #### **🔄 Comparación de Datos**
 
 ```bash
-# Comparación básica con exclusiones automáticas
+# Comparación básica con exclusiones automáticas (→ generated/comparison_result.json)
 ./deepComparator -table=billing_model -verbose
 
 # Incluir todas las columnas (sin exclusiones)
@@ -294,7 +317,7 @@ Encuentra todas las tablas que referencian un ID específico como foreign key.
 # Analizar referencias a una columna específica
 ./deepComparator -table=users -target-column=user_id -find-references -verbose
 
-# Guardar análisis en archivo específico
+# Guardar análisis en archivo específico (→ generated/formula_refs.json)
 ./deepComparator -table=formula -find-references -output=formula_refs.json
 
 # Analizar referencias en esquema específico
@@ -897,6 +920,28 @@ Encuentra todas las tablas que tienen foreign keys apuntando a una tabla/columna
 ./deepComparator -table=accounts -id="encoded_uuid" -analyze-fk-references -decode-uuids=false
 ```
 
+#### **🔧 Generación de Scripts UPDATE (Nuevo)**
+
+```bash
+# Generar script para mover FK del concepto ID 89 al ID 90 (→ generated/update_fk_references.sql)
+./deepComparator -table=concepts -id-target=89 -id-destination=90 -generate-update-script -verbose
+
+# Con base de datos específica
+./deepComparator -table=concepts -source-db=db2 -id-target=89 -id-destination=90 -generate-update-script -verbose
+
+# Script para reemplazar usuario con UUID específico 
+./deepComparator -table=users -source-db=db2 -id-target="550e8400-e29b-41d4-a716-446655440000" -id-destination="660f9500-f39c-52e5-c827-116f6ee4f81f" -generate-update-script
+
+# Generar script con nombre personalizado
+./deepComparator -table=categories -source-db=db1 -id-target=25 -id-destination=30 -generate-update-script -output=migrate_category_25.sql
+
+# Script para esquema específico
+./deepComparator -table=products -schema=catalog -source-db=db1 -id-target=100 -id-destination=105 -generate-update-script -verbose
+
+# Análisis complejo con optimización de workers
+./deepComparator -table=main_entities -source-db=db1 -id-target=999 -id-destination=1000 -generate-update-script -max-workers=8 -verbose
+```
+
 ### **Opciones Específicas**
 
 | Opción | Descripción | Valor por defecto |
@@ -1127,6 +1172,174 @@ Cada elemento en el array `references` contiene:
 | `"total_references": 0` | No hay datos activos | Normal para tablas vacías |
 | `"referencing_tables": 0` | No hay FKs apuntando a tabla | Verificar estructura de FKs |
 
+## 🔧 Generación de Scripts UPDATE (Nuevo)
+*📚 [Volver al índice](#-índice)*
+
+Esta funcionalidad genera scripts SQL seguros para actualizar todas las referencias de foreign key de un ID específico a otro ID y eliminar el registro original.
+
+### **¿Para qué sirve?**
+
+- **Consolidación de Datos**: Fusionar registros duplicados actualizando todas sus referencias
+- **Migración de IDs**: Cambiar IDs manteniendo integridad referencial
+- **Limpieza de Datos**: Reemplazar registros obsoletos por versiones actualizadas
+- **Reasignación**: Cambiar la propiedad de registros a otros elementos
+
+### **Funcionamiento**
+
+1. **Descubre** todas las foreign keys que apuntan a la tabla objetivo
+2. **Genera** comandos UPDATE para cada tabla que referencia el ID objetivo  
+3. **Incluye** el comando DELETE del registro original
+4. **Envuelve** todo en una transacción segura (BEGIN/COMMIT)
+
+### **Uso Básico**
+
+```bash
+./deepComparator -table=<tabla> -source-db=<db1|db2> -id-target=<id_origen> -id-destination=<id_destino> -generate-update-script [opciones]
+```
+
+### **Parámetros Requeridos**
+
+| Parámetro | Descripción | Ejemplo | Por defecto |
+|-----------|-------------|---------|-------------|
+| `-table` | Tabla que contiene el registro a migrar | `concepts` | - |
+| `-source-db` | Base de datos para análisis ('db1' o 'db2') | `db1` | `db1` |
+| `-id-target` | ID que será reemplazado | `89` | - |
+| `-id-destination` | ID que reemplazará al objetivo | `90` | - |
+
+### **Ejemplo Completo**
+
+```bash
+# Generar script para migrar concepto ID 89 -> 90 (usa db1 por defecto)
+./deepComparator -table=concepts -id-target=89 -id-destination=90 -generate-update-script -verbose
+
+# Con base de datos específica
+./deepComparator -table=concepts -source-db=db2 -id-target=89 -id-destination=90 -generate-update-script -verbose
+```
+
+### **Resultado del Script**
+
+El script generado (`update_fk_references.sql`) contendrá:
+
+```sql
+-- Generated FK Update Script
+-- Target table: public.concepts
+-- Update FK references from ID 89 to ID 90
+-- Generated at: 2025-10-30 10:00:02
+-- WARNING: Review this script before execution!
+
+BEGIN;
+
+-- Update foreign key references
+-- Table: public.transactions, Column: concept_id
+UPDATE public.transactions SET concept_id = 90 WHERE concept_id = 89;
+
+-- Table: public.bill_items, Column: concept_id  
+UPDATE public.bill_items SET concept_id = 90 WHERE concept_id = 89;
+
+-- Delete original record
+DELETE FROM public.concepts WHERE id = 89;
+
+COMMIT;
+
+-- Script execution completed
+-- Verify results and check referential integrity
+```
+
+### **Opciones Adicionales**
+
+| Opción | Descripción | Ejemplo |
+|--------|-------------|---------|
+| `-output` | Nombre personalizado para el archivo SQL | `-output=migrate_concept_89.sql` |
+| `-schema` | Esquema específico (por defecto: public) | `-schema=catalog` |
+| `-verbose` | Mostrar información detallada | `-verbose` |
+| `-max-workers` | Workers para análisis (por defecto: 4) | `-max-workers=8` |
+
+### **Casos de Uso Reales**
+
+#### **🔄 1. Fusión de Registros Duplicados**
+
+```bash
+# Problema: Tienes dos conceptos que representan lo mismo
+# Solución: Fusionar concepto 45 en concepto 42
+./deepComparator -table=concepts -source-db=db1 -id-target=45 -id-destination=42 -generate-update-script
+```
+
+#### **🏗️ 2. Migración de Estructura**
+
+```bash
+# Problema: Necesitas cambiar la numeración de categorías
+# Solución: Migrar categoría 100 -> 200
+./deepComparator -table=categories -source-db=db2 -id-target=100 -id-destination=200 -generate-update-script -output=migrate_categories.sql
+```
+
+#### **👤 3. Reasignación de Propiedad**
+
+```bash
+# Problema: Un usuario se va y necesitas reasignar sus datos
+# Solución: Transferir usuario A -> usuario B
+./deepComparator -table=users -source-db=db1 -id-target="user-uuid-a" -id-destination="user-uuid-b" -generate-update-script
+```
+
+### **⚠️ Consideraciones de Seguridad**
+
+#### **Antes de Ejecutar el Script:**
+
+1. **✅ Respalda la base de datos** completamente
+2. **✅ Revisa el script generado** línea por línea
+3. **✅ Verifica que el ID destino existe** en la tabla objetivo
+4. **✅ Confirma que no hay constraints** que puedan fallar
+5. **✅ Ejecuta en un entorno de prueba** primero
+
+#### **Durante la Ejecución:**
+
+```bash
+# Ejecutar el script en la base de datos
+psql -d mi_base_datos -f update_fk_references.sql
+
+# Verificar resultados
+SELECT COUNT(*) FROM concepts WHERE id = 89; -- Debe ser 0
+SELECT COUNT(*) FROM transactions WHERE concept_id = 90; -- Debe incluir las migraciones
+```
+
+#### **Después de la Ejecución:**
+
+```bash
+# Verificar integridad referencial
+SELECT 
+  t.table_name,
+  COUNT(*) as orphaned_references
+FROM information_schema.tables t
+WHERE t.table_name IN ('transactions', 'bill_items')
+  AND NOT EXISTS (
+    SELECT 1 FROM concepts c 
+    WHERE c.id = (SELECT concept_id FROM t.table_name LIMIT 1)
+  );
+```
+
+### **🚨 Limitaciones**
+
+- **Transacciones**: El script usa transacciones, pero en tablas muy grandes puede ser lento
+- **Constraints**: No maneja constraints complejos automáticamente  
+- **Cascadas**: No detecta DELETE/UPDATE CASCADE automáticos
+- **Validación**: No valida que el ID destino exista antes de generar el script
+
+### **📊 Información del Archivo Generado**
+
+Por defecto, el archivo se llama `update_fk_references.sql`, pero puedes cambiarlo:
+
+```bash
+# Archivo por defecto
+-generate-update-script                          → generated/update_fk_references.sql
+
+# Archivo personalizado
+-generate-update-script -output=migrate_data     → generated/migrate_data.sql
+
+# Con nombre específico
+-generate-update-script -output=migration_123    → generated/migration_123.sql
+```
+
+**📁 Organización de Archivos**: Todos los archivos se generan automáticamente en la carpeta `generated/` que se excluye del control de versiones via `.gitignore`.
+
 ## Algoritmo de Matching
 
 La aplicación utiliza un algoritmo inteligente de matching que:
@@ -1309,6 +1522,45 @@ done
 # 3. Verificar foreign keys
 ./deepComparator -table=transactions -find-references -verbose
 ```
+
+### **🔧 5. Fusión de Registros Duplicados**
+
+```bash
+# 1. Analizar impacto del registro duplicado
+./deepComparator -table=concepts -id="89" -analyze-fk-references -verbose
+
+# 2. Generar script de fusión
+./deepComparator -table=concepts -source-db=db1 -id-target=89 -id-destination=90 -generate-update-script -output=merge_concept_89_to_90.sql
+
+# 3. Revisar y ejecutar (después de backup!)
+cat merge_concept_89_to_90.sql
+psql -d database -f merge_concept_89_to_90.sql
+```
+
+### **🏗️ 6. Migración Segura de Datos**
+
+```bash
+#!/bin/bash
+# Workflow completo para migrar usuario UUID
+
+OLD_USER="550e8400-e29b-41d4-a716-446655440000"  
+NEW_USER="660f9500-f39c-52e5-c827-116f6ee4f81f"
+
+# 1. Verificar que el usuario destino existe
+echo "Checking destination user exists..."
+./deepComparator -table=users -id="$NEW_USER" -analyze-fk-references
+
+# 2. Analizar impacto del usuario origen
+echo "Analyzing source user impact..."
+./deepComparator -table=users -id="$OLD_USER" -analyze-fk-references -output="user_${OLD_USER}_impact.json"
+
+# 3. Generar script de migración
+echo "Generating migration script..."
+./deepComparator -table=users -source-db=db1 -id-target="$OLD_USER" -id-destination="$NEW_USER" -generate-update-script -output="migrate_user_${OLD_USER}.sql"
+
+echo "Migration script ready: migrate_user_${OLD_USER}.sql"
+echo "Review before execution!"
+```
 2. **Usar análisis de referencias** para mapear dependencias
 3. **Ejecutar comparaciones regulares** en datos críticos
 4. **Archivar resultados** para análisis histórico
@@ -1366,9 +1618,11 @@ go vet ./...
 ## 📋 Roadmap
 
 ### **v2.0 - Próximas Funcionalidades**
+- [ ] **Validación de Scripts**: Verificar que ID destino existe antes de generar script
+- [ ] **Scripts con Rollback**: Generar scripts de reversión automáticos
+- [ ] **Batch Operations**: Procesar múltiples migraciones en lote  
 - [ ] **Análisis de Índices**: Comparar índices, constraints y triggers
 - [ ] **Comparación Incremental**: Solo analizar cambios desde última ejecución
-- [ ] **Paralelización**: Procesamiento concurrente para tablas grandes
 - [ ] **Cache Inteligente**: Almacenar resultados para re-ejecuciones rápidas
 - [ ] **Filtros Avanzados**: Condiciones WHERE para limitar datos a comparar
 - [ ] **Reportes HTML**: Salida visual para presentaciones
@@ -1387,13 +1641,16 @@ Este proyecto usa [Semantic Versioning](https://semver.org/):
 - **MINOR**: Nueva funcionalidad compatible con versiones anteriores  
 - **PATCH**: Corrección de bugs compatibles
 
-**Versión Actual**: `v1.3.0`
+**Versión Actual**: `v1.4.1`
 - ✅ Comparación profunda de datos con foreign keys
 - ✅ Análisis de referencias cruzadas  
 - ✅ Exclusión configurable de columnas
 - ✅ Salida JSON estructurada
-- ✅ **Nuevo**: Decodificación automática de UUIDs Base64 para facilitar búsquedas en BD
-- ✅ **Nuevo**: Procesamiento concurrente optimizado con workers configurables
+- ✅ Decodificación automática de UUIDs Base64 para facilitar búsquedas en BD
+- ✅ Procesamiento concurrente optimizado con workers configurables
+- ✅ **🆕 Nuevo**: Análisis de FK References por ID específico con conteo preciso
+- ✅ **🆕 Nuevo**: Generación de scripts SQL UPDATE para migrar foreign keys de manera segura
+- ✅ **🗂️ Nuevo**: Organización automática de archivos en carpeta `generated/`
 
 ## 📄 Licencia
 

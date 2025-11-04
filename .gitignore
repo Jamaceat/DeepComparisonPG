@@ -1,5 +1,5 @@
 .env
 /.github
-comparison_result.json
-comparison_result_references.json
-id_matches_tables.json
+generated/
+*.json
+*.sql

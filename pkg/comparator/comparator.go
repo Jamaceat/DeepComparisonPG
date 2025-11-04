@@ -600,11 +600,16 @@ func (c *Comparator) getExcludeColumnsFromFile(criteria *models.MatchCriteria) (
 
 // AnalyzeFKReferences finds all tables that reference a specific ID as foreign key
 func (c *Comparator) AnalyzeFKReferences(schema, tableName, targetID string) (*models.FKAnalysisResult, error) {
-	// Start connection progress
-	connProgress := progress.NewConnectionProgress("Connecting to databases for FK analysis")
+	// Create connection progress
+	connProgress := progress.NewSimpleProgress("Connecting to databases for FK analysis")
 
-	// Get foreign keys that reference the target table
-	query := `
+	// Ensure we have active connections
+	if c.DB1 == nil || c.DB2 == nil {
+		return nil, fmt.Errorf("database connections not initialized")
+	}
+
+	// Query to find all foreign key constraints that reference the target table
+	fkQuery := `
 		SELECT 
 			tc.constraint_name,
 			tc.table_schema,
@@ -625,12 +630,12 @@ func (c *Comparator) AnalyzeFKReferences(schema, tableName, targetID string) (*m
 			AND ccu.table_name = $2
 		ORDER BY tc.table_schema, tc.table_name, kcu.column_name`
 
-	connProgress.Success("Connected successfully")
+	connProgress.Finish("Connected successfully")
 
 	// Create loading progress for FK discovery
 	loadingProgress := progress.NewSimpleProgress("Discovering foreign key constraints")
 
-	rows1, err := c.DB1.DB.Query(query, schema, tableName)
+	rows1, err := c.DB1.DB.Query(fkQuery, schema, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query foreign keys from DB1: %w", err)
 	}
@@ -638,7 +643,7 @@ func (c *Comparator) AnalyzeFKReferences(schema, tableName, targetID string) (*m
 
 	var fkConstraints []models.FKTableReference
 
-	// Process foreign key constraints
+	// Process formal foreign key constraints
 	for rows1.Next() {
 		var constraintName, tableSchema, table, columnName string
 		var foreignTableSchema, foreignTableName, foreignColumnName string
@@ -657,7 +662,52 @@ func (c *Comparator) AnalyzeFKReferences(schema, tableName, targetID string) (*m
 		})
 	}
 
-	loadingProgress.Finish(fmt.Sprintf("Found %d foreign key constraints", len(fkConstraints)))
+	// If no formal FK constraints found, look for potential FK relationships based on column naming patterns
+	if len(fkConstraints) == 0 {
+		// Search for columns that might reference this table based on naming conventions
+		potentialFKQuery := `
+			SELECT DISTINCT 
+				'' as constraint_name,
+				c.table_schema,
+				c.table_name,
+				c.column_name
+			FROM information_schema.columns c
+			WHERE c.table_schema = $1 
+				AND c.column_name = $2
+				AND c.table_name != $3`
+
+		// Try common patterns: table_name + '_id'
+		columnPatterns := []string{
+			tableName + "_id",
+			tableName + "Id",
+			tableName + "_ID",
+		}
+
+		for _, pattern := range columnPatterns {
+			rows, err := c.DB1.DB.Query(potentialFKQuery, schema, pattern, tableName)
+			if err != nil {
+				continue
+			}
+
+			for rows.Next() {
+				var constraintName, tableSchema, table, columnName string
+				err := rows.Scan(&constraintName, &tableSchema, &table, &columnName)
+				if err != nil {
+					continue
+				}
+
+				fkConstraints = append(fkConstraints, models.FKTableReference{
+					Schema:         tableSchema,
+					TableName:      table,
+					ColumnName:     columnName,
+					ConstraintName: fmt.Sprintf("potential_fk_%s_%s_%s", tableSchema, table, columnName),
+				})
+			}
+			rows.Close()
+		}
+	}
+
+	loadingProgress.Finish(fmt.Sprintf("Found %d FK constraints (formal + potential)", len(fkConstraints)))
 
 	if len(fkConstraints) == 0 {
 		return &models.FKAnalysisResult{
@@ -677,66 +727,57 @@ func (c *Comparator) AnalyzeFKReferences(schema, tableName, targetID string) (*m
 	for i := range fkConstraints {
 		fk := &fkConstraints[i]
 
-		// Query both databases for references to the target ID
-		refQuery := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = $1 LIMIT 5",
+		// Find matching records in both databases
+		query := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = $1 LIMIT 5",
 			fk.ColumnName, fk.Schema, fk.TableName, fk.ColumnName)
 
 		// Query DB1
-		rows1, err := c.DB1.DB.Query(refQuery, targetID)
-		if err == nil {
-			var samples []string
-			var count int
-			for rows1.Next() {
-				var value interface{}
-				if err := rows1.Scan(&value); err == nil {
-					if strVal := fmt.Sprintf("%v", convertBytesToString(value)); strVal != "" {
-						samples = append(samples, strVal)
-						count++
-					}
-				}
-			}
-			rows1.Close()
-			fk.MatchesDB1 = count
-
-			// Get full count
-			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s WHERE %s = $1",
-				fk.Schema, fk.TableName, fk.ColumnName)
-			if err := c.DB1.DB.QueryRow(countQuery, targetID).Scan(&fk.MatchesDB1); err != nil {
-				fk.MatchesDB1 = 0
-			}
-
-			if len(samples) > 0 {
-				fk.SampleRows = samples
-			}
+		rows1, err := c.DB1.DB.Query(query, targetID)
+		if err != nil {
+			// If query fails, skip this FK
+			analysisProgress.Update(1)
+			continue
 		}
+
+		var db1Values []string
+		for rows1.Next() {
+			var value string
+			if err := rows1.Scan(&value); err != nil {
+				continue
+			}
+			db1Values = append(db1Values, value)
+		}
+		rows1.Close()
 
 		// Query DB2
-		rows2, err := c.DB2.DB.Query(refQuery, targetID)
-		if err == nil {
-			var count int
-			for rows2.Next() {
-				var value interface{}
-				if err := rows2.Scan(&value); err == nil {
-					count++
-				}
-			}
-			rows2.Close()
-			fk.MatchesDB2 = count
-
-			// Get full count
-			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s WHERE %s = $1",
-				fk.Schema, fk.TableName, fk.ColumnName)
-			if err := c.DB2.DB.QueryRow(countQuery, targetID).Scan(&fk.MatchesDB2); err != nil {
-				fk.MatchesDB2 = 0
-			}
+		rows2, err := c.DB2.DB.Query(query, targetID)
+		if err != nil {
+			// If query fails, skip this FK
+			analysisProgress.Update(1)
+			continue
 		}
+
+		var db2Values []string
+		for rows2.Next() {
+			var value string
+			if err := rows2.Scan(&value); err != nil {
+				continue
+			}
+			db2Values = append(db2Values, value)
+		}
+		rows2.Close()
+
+		// Update FK constraint with found values
+		fk.MatchesDB1 = len(db1Values)
+		fk.MatchesDB2 = len(db2Values)
+		fk.SampleRows = db1Values
 
 		analysisProgress.Update(1)
 	}
 
-	analysisProgress.FinishWithMessage("Analysis completed successfully")
+	analysisProgress.Finish()
 
-	// Filter out constraints with no matches
+	// Filter out FKs with no references
 	var referencingTables []models.FKTableReference
 	for _, fk := range fkConstraints {
 		if fk.MatchesDB1 > 0 || fk.MatchesDB2 > 0 {
@@ -744,12 +785,117 @@ func (c *Comparator) AnalyzeFKReferences(schema, tableName, targetID string) (*m
 		}
 	}
 
-	return &models.FKAnalysisResult{
+	result := &models.FKAnalysisResult{
 		TargetTable:       tableName,
 		TargetSchema:      schema,
 		TargetID:          targetID,
 		Timestamp:         time.Now(),
 		TotalConstraints:  len(fkConstraints),
 		ReferencingTables: referencingTables,
-	}, nil
+	}
+
+	return result, nil
+}
+
+// discoverFKConstraints finds all foreign key constraints that reference a specific table
+func (c *Comparator) discoverFKConstraints(schema, tableName string) ([]models.FKTableReference, error) {
+	query := `
+		SELECT 
+			tc.constraint_name,
+			tc.table_schema,
+			tc.table_name,
+			kcu.column_name
+		FROM information_schema.table_constraints AS tc 
+		JOIN information_schema.key_column_usage AS kcu
+			ON tc.constraint_name = kcu.constraint_name
+			AND tc.table_schema = kcu.table_schema
+		JOIN information_schema.constraint_column_usage AS ccu
+			ON ccu.constraint_name = tc.constraint_name
+			AND ccu.table_schema = tc.table_schema
+		WHERE tc.constraint_type = 'FOREIGN KEY' 
+			AND ccu.table_schema = $1 
+			AND ccu.table_name = $2
+		ORDER BY tc.table_schema, tc.table_name, kcu.column_name`
+
+	// Use DB1 for schema information (both DBs should have same structure)
+	rows, err := c.DB1.DB.Query(query, schema, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query foreign keys: %w", err)
+	}
+	defer rows.Close()
+
+	var fkConstraints []models.FKTableReference
+
+	// Process foreign key constraints
+	for rows.Next() {
+		var constraintName, tableSchema, table, columnName string
+
+		err := rows.Scan(&constraintName, &tableSchema, &table, &columnName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan foreign key constraint: %w", err)
+		}
+
+		fkConstraints = append(fkConstraints, models.FKTableReference{
+			Schema:         tableSchema,
+			TableName:      table,
+			ColumnName:     columnName,
+			ConstraintName: constraintName,
+		})
+	}
+
+	return fkConstraints, nil
+}
+
+// GenerateUpdateScript generates SQL script to update foreign key references from idTarget to idDestination
+// and then delete the original record
+func (c *Comparator) GenerateUpdateScript(schema, tableName, idTarget, idDestination string) (string, error) {
+	// Discover FK constraints pointing to this table
+	fkConstraints, err := c.discoverFKConstraints(schema, tableName)
+	if err != nil {
+		return "", fmt.Errorf("failed to discover FK constraints: %w", err)
+	}
+
+	var script strings.Builder
+
+	// Header
+	script.WriteString("-- Generated FK Update Script\n")
+	script.WriteString(fmt.Sprintf("-- Target table: %s.%s\n", schema, tableName))
+	script.WriteString(fmt.Sprintf("-- Update FK references from ID %s to ID %s\n", idTarget, idDestination))
+	script.WriteString(fmt.Sprintf("-- Generated at: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+	script.WriteString("-- WARNING: Review this script before execution!\n")
+	script.WriteString("\n")
+
+	// Begin transaction
+	script.WriteString("BEGIN;\n\n")
+
+	// Update foreign key references
+	script.WriteString("-- Update foreign key references\n")
+	for i, fk := range fkConstraints {
+		if i > 0 {
+			script.WriteString("\n")
+		}
+		script.WriteString(fmt.Sprintf("-- Table: %s.%s, Column: %s\n", fk.Schema, fk.TableName, fk.ColumnName))
+
+		updateSQL := fmt.Sprintf("UPDATE %s.%s SET %s = %s WHERE %s = %s;",
+			fk.Schema, fk.TableName, fk.ColumnName, idDestination, fk.ColumnName, idTarget)
+		script.WriteString(updateSQL + "\n")
+	}
+
+	script.WriteString("\n")
+
+	// Delete original record
+	script.WriteString("-- Delete original record\n")
+	deleteSQL := fmt.Sprintf("DELETE FROM %s.%s WHERE id = %s;", schema, tableName, idTarget)
+	script.WriteString(deleteSQL + "\n")
+
+	script.WriteString("\n")
+
+	// Commit transaction
+	script.WriteString("COMMIT;\n")
+
+	script.WriteString("\n")
+	script.WriteString("-- Script execution completed\n")
+	script.WriteString("-- Verify results and check referential integrity\n")
+
+	return script.String(), nil
 }
